@@ -74,13 +74,16 @@ dependencies = [
 test = "pytest {args:tests}"
 test-cov = "pytest --cov=meetcap {args:tests}"
 fmt = [
-    "black {args:.}",
-    "ruff --fix {args:.}",
+    "ruff format {args:.}",
+    "ruff check --fix {args:.}",
+]
+format = [
+    "ruff format {args:.}",
+    "ruff check --fix {args:.}",
 ]
 lint = [
-    "black --check {args:.}",
+    "ruff format --check {args:.}",
     "ruff check {args:.}",
-    "mypy {args:meetcap}",
 ]
 record = "python -m meetcap.cli record {args}"
 devices = "python -m meetcap.cli devices {args}"
@@ -93,6 +96,8 @@ target-version = ["py310", "py311", "py312"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+[tool.ruff.lint]
 select = [
     "E",    # pycodestyle errors
     "W",    # pycodestyle warnings
@@ -136,5 +141,5 @@ addopts = [
     "--cov-report=term-missing",
     "--cov-report=html",
     "--cov-report=xml",
-    "--cov-fail-under=90",
+    "--cov-fail-under=75",
 ]

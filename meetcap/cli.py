@@ -5,7 +5,6 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -47,7 +46,7 @@ app = typer.Typer(
 
 class RecordingOrchestrator:
     """orchestrates the recording, transcription, and summarization workflow"""
-    
+
     def __init__(self, config: Config):
         """initialize orchestrator with config."""
         self.config = config
@@ -57,20 +56,20 @@ class RecordingOrchestrator:
         self.interrupt_count = 0
         self.last_interrupt_time = 0
         self.processing_complete = False
-    
+
     def run(
         self,
-        device: Optional[str] = None,
-        output_dir: Optional[str] = None,
-        sample_rate: Optional[int] = None,
-        channels: Optional[int] = None,
+        device: str | None = None,
+        output_dir: str | None = None,
+        sample_rate: int | None = None,
+        channels: int | None = None,
         stt_engine: str = "fwhisper",
-        llm_path: Optional[str] = None,
-        seed: Optional[int] = None,
+        llm_path: str | None = None,
+        seed: int | None = None,
     ) -> None:
         """
         run the complete recording workflow.
-        
+
         args:
             device: device name or index
             output_dir: output directory path
@@ -85,24 +84,23 @@ class RecordingOrchestrator:
             out_path = Path(output_dir)
         else:
             out_path = self.config.expand_path(self.config.get("paths", "out_dir"))
-        
+
         sample_rate = sample_rate or self.config.get("audio", "sample_rate")
         channels = channels or self.config.get("audio", "channels")
-        
+
         # initialize recorder
         self.recorder = AudioRecorder(
             output_dir=out_path,
             sample_rate=sample_rate,
             channels=channels,
         )
-        
+
         # find audio device
         devices = list_audio_devices()
         if not devices:
-            ErrorHandler.handle_runtime_error(
-                RuntimeError("no audio input devices found")
-            )
-        
+            ErrorHandler.handle_runtime_error(RuntimeError("no audio input devices found"))
+            return  # this line shouldn't be reached due to sys.exit, but helps with testing
+
         selected_device = None
         if device:
             # try as index first
@@ -118,12 +116,11 @@ class RecordingOrchestrator:
             selected_device = find_device_by_name(devices, preferred)
             if not selected_device:
                 selected_device = select_best_device(devices)
-        
+
         if not selected_device:
-            ErrorHandler.handle_config_error(
-                ValueError(f"device not found: {device}")
-            )
-        
+            ErrorHandler.handle_config_error(ValueError(f"device not found: {device}"))
+            return  # this line shouldn't be reached due to sys.exit, but helps with testing
+
         # show recording banner
         console.print(
             Panel(
@@ -133,35 +130,33 @@ class RecordingOrchestrator:
                 expand=False,
             )
         )
-        
+
         # setup hotkey handler
         self.hotkey_manager = HotkeyManager(self._stop_recording)
         hotkey_combo = self.config.get("hotkey", "stop")
-        
+
         # setup signal handler for Ctrl-C
         signal.signal(signal.SIGINT, self._handle_interrupt)
-        
+
         try:
             # start recording
-            audio_path = self.recorder.start_recording(
+            self.recorder.start_recording(
                 device_index=selected_device.index,
                 device_name=selected_device.name,
             )
-            
+
             # start hotkey listener
             self.hotkey_manager.start(hotkey_combo)
             console.print("[cyan]⌃C[/cyan] press once to stop recording, twice to exit")
-            
+
             # show progress while recording
             self._show_recording_progress()
-            
+
             # stop recording (triggered by hotkey or Ctrl-C)
             final_path = self.recorder.stop_recording()
             if not final_path:
-                ErrorHandler.handle_runtime_error(
-                    RuntimeError("recording failed or was empty")
-                )
-            
+                ErrorHandler.handle_runtime_error(RuntimeError("recording failed or was empty"))
+
             # run transcription and summarization
             self.processing_complete = False
             self._process_recording(
@@ -171,7 +166,7 @@ class RecordingOrchestrator:
                 seed=seed,
             )
             self.processing_complete = True
-            
+
         except KeyboardInterrupt:
             # this should not normally be reached due to signal handler
             console.print("\n[yellow]operation cancelled[/yellow]")
@@ -184,19 +179,19 @@ class RecordingOrchestrator:
                 self.hotkey_manager.stop()
             # restore default signal handler
             signal.signal(signal.SIGINT, signal.default_int_handler)
-    
+
     def _handle_interrupt(self, signum, frame) -> None:
         """handle Ctrl-C interrupt signal."""
         current_time = time.time()
-        
+
         # check for double Ctrl-C (within 2 seconds)
         if current_time - self.last_interrupt_time < 2.0:
             self.interrupt_count += 1
         else:
             self.interrupt_count = 1
-        
+
         self.last_interrupt_time = current_time
-        
+
         if self.interrupt_count >= 2:
             # double Ctrl-C: exit immediately
             console.print("\n[red]double interrupt - exiting immediately[/red]")
@@ -206,47 +201,57 @@ class RecordingOrchestrator:
         else:
             # single Ctrl-C: stop recording gracefully
             if self.recorder and self.recorder.is_recording():
-                console.print("\n[yellow]⏹[/yellow] stopping recording (press Ctrl-C again to force exit)")
+                console.print(
+                    "\n[yellow]⏹[/yellow] stopping recording (press Ctrl-C again to force exit)"
+                )
                 self._stop_recording()
             elif not self.processing_complete:
-                console.print("\n[yellow]processing in progress (press Ctrl-C again to force exit)[/yellow]")
+                console.print(
+                    "\n[yellow]processing in progress (press Ctrl-C again to force exit)[/yellow]"
+                )
             else:
                 # if not recording and processing is done, exit
                 sys.exit(0)
-    
+
     def _stop_recording(self) -> None:
         """callback for hotkey to stop recording."""
         self.stop_event.set()
-    
+
     def _show_recording_progress(self) -> None:
         """display recording progress until stopped."""
         start_time = time.time()
-        hotkey_str = self.config.get("hotkey", "stop").replace("<cmd>", "⌘").replace("<shift>", "⇧").replace("+", "").upper()
-        
+        hotkey_str = (
+            self.config.get("hotkey", "stop")
+            .replace("<cmd>", "⌘")
+            .replace("<shift>", "⇧")
+            .replace("+", "")
+            .upper()
+        )
+
         while not self.stop_event.is_set():
             elapsed = time.time() - start_time
             minutes = int(elapsed // 60)
             seconds = int(elapsed % 60)
-            
+
             console.print(
                 f"[cyan]recording[/cyan] {minutes:02d}:{seconds:02d} "
                 f"[dim]({hotkey_str} or ⌃C to stop)[/dim]",
                 end="\r",
             )
             time.sleep(0.5)
-        
+
         console.print()  # new line after progress
-    
+
     def _process_recording(
         self,
         audio_path: Path,
         stt_engine: str,
-        llm_path: Optional[str],
-        seed: Optional[int],
+        llm_path: str | None,
+        seed: int | None,
     ) -> None:
         """
         process recorded audio: transcribe and summarize.
-        
+
         args:
             audio_path: path to recorded audio
             stt_engine: stt engine to use
@@ -254,15 +259,13 @@ class RecordingOrchestrator:
             seed: optional random seed
         """
         base_path = audio_path.with_suffix("")
-        
+
         # transcription
         console.print("\n[bold]📝 transcription[/bold]")
-        
+
         if stt_engine == "fwhisper":
             stt_model_name = self.config.get("models", "stt_model_name", "large-v3")
-            stt_model_path = self.config.expand_path(
-                self.config.get("models", "stt_model_path")
-            )
+            stt_model_path = self.config.expand_path(self.config.get("models", "stt_model_path"))
             stt_service = FasterWhisperService(
                 model_path=str(stt_model_path),
                 model_name=stt_model_name,
@@ -276,23 +279,23 @@ class RecordingOrchestrator:
                 whisper_cpp_path=whisper_cpp_path,
                 model_path=stt_model_path,
             )
-        
+
         try:
             transcript_result = stt_service.transcribe(audio_path)
             text_path, json_path = save_transcript(transcript_result, base_path)
         except Exception as e:
             console.print(f"[red]transcription failed: {e}[/red]")
             return
-        
+
         # summarization
         console.print("\n[bold]🤖 summarization[/bold]")
-        
+
         # use provided path or default from config
         if llm_path:
             llm_path = Path(llm_path)
         else:
             llm_path = self.config.expand_path(self.config.get("models", "llm_gguf_path"))
-        
+
         # ensure model exists (download if needed)
         if not llm_path.exists():
             console.print("[yellow]llm model not found, attempting download...[/yellow]")
@@ -301,9 +304,9 @@ class RecordingOrchestrator:
             if not llm_path:
                 console.print("[red]failed to download llm model[/red]")
                 return
-        
+
         llm_config = self.config.get_section("llm")
-        
+
         llm_service = SummarizationService(
             model_path=llm_path,
             n_ctx=llm_config.get("n_ctx", 8192),
@@ -314,18 +317,18 @@ class RecordingOrchestrator:
             max_tokens=llm_config.get("max_tokens", 2048),
             seed=seed,
         )
-        
+
         try:
             # read transcript text
-            with open(text_path, "r", encoding="utf-8") as f:
+            with open(text_path, encoding="utf-8") as f:
                 transcript_text = f.read()
-            
+
             summary = llm_service.summarize(transcript_text)
             summary_path = save_summary(summary, base_path)
         except Exception as e:
             console.print(f"[red]summarization failed: {e}[/red]")
             return
-        
+
         # show final results
         console.print(
             Panel(
@@ -343,25 +346,25 @@ class RecordingOrchestrator:
 
 @app.command()
 def record(
-    device: Optional[str] = typer.Option(
+    device: str | None = typer.Option(
         None,
         "--device",
         "-d",
         help="audio device name or index",
     ),
-    out: Optional[str] = typer.Option(
+    out: str | None = typer.Option(
         None,
         "--out",
         "-o",
         help="output directory",
     ),
-    rate: Optional[int] = typer.Option(
+    rate: int | None = typer.Option(
         None,
         "--rate",
         "-r",
         help="sample rate (hz)",
     ),
-    channels: Optional[int] = typer.Option(
+    channels: int | None = typer.Option(
         None,
         "--channels",
         "-c",
@@ -372,17 +375,17 @@ def record(
         "--stt",
         help="stt engine: fwhisper or whispercpp",
     ),
-    llm: Optional[str] = typer.Option(
+    llm: str | None = typer.Option(
         None,
         "--llm",
         help="path to llm gguf model",
     ),
-    seed: Optional[int] = typer.Option(
+    seed: int | None = typer.Option(
         None,
         "--seed",
         help="random seed for llm",
     ),
-    log_file: Optional[str] = typer.Option(
+    log_file: str | None = typer.Option(
         None,
         "--log-file",
         help="path to log file",
@@ -392,10 +395,10 @@ def record(
     # setup logging
     if log_file:
         logger.add_file_handler(Path(log_file))
-    
+
     # load config
     config = Config()
-    
+
     # run orchestrator
     orchestrator = RecordingOrchestrator(config)
     orchestrator.run(
@@ -420,23 +423,23 @@ def summarize(
         "--stt",
         help="stt engine: fwhisper or whispercpp",
     ),
-    llm: Optional[str] = typer.Option(
+    llm: str | None = typer.Option(
         None,
         "--llm",
         help="path to llm gguf model",
     ),
-    seed: Optional[int] = typer.Option(
+    seed: int | None = typer.Option(
         None,
         "--seed",
         help="random seed for llm",
     ),
-    out: Optional[str] = typer.Option(
+    out: str | None = typer.Option(
         None,
         "--out",
         "-o",
         help="output directory for results",
     ),
-    log_file: Optional[str] = typer.Option(
+    log_file: str | None = typer.Option(
         None,
         "--log-file",
         help="path to log file",
@@ -446,51 +449,51 @@ def summarize(
     # setup logging
     if log_file:
         logger.add_file_handler(Path(log_file))
-    
+
     # validate input file
     audio_path = Path(audio_file)
     if not audio_path.exists():
         console.print(f"[red]error: file not found: {audio_file}[/red]")
         sys.exit(1)
-    
+
     # check if file format is supported
-    supported_formats = ['.m4a', '.wav', '.mp3', '.mp4', '.aac', '.flac', '.ogg', '.opus', '.webm']
+    supported_formats = [".m4a", ".wav", ".mp3", ".mp4", ".aac", ".flac", ".ogg", ".opus", ".webm"]
     if audio_path.suffix.lower() not in supported_formats:
         console.print(f"[red]error: unsupported file format: {audio_path.suffix}[/red]")
         console.print(f"[yellow]supported formats: {', '.join(supported_formats)}[/yellow]")
         sys.exit(1)
-    
+
     # load config
     config = Config()
-    
+
     # determine output directory
     if out:
         output_dir = Path(out)
     else:
         # default to same directory as input file
         output_dir = audio_path.parent
-    
+
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # show processing banner
     console.print(
         Panel(
             f"[bold cyan]processing audio file[/bold cyan]\n"
             f"[white]file: {audio_path.name}[/white]\n"
-            f"[white]size: {audio_path.stat().st_size / (1024*1024):.1f} MB[/white]",
+            f"[white]size: {audio_path.stat().st_size / (1024 * 1024):.1f} MB[/white]",
             title="📁 file processing",
             expand=False,
         )
     )
-    
+
     # create base path for outputs in the output directory
     base_name = audio_path.stem
     base_path = output_dir / base_name
-    
+
     # process the file (transcribe and summarize)
     orchestrator = RecordingOrchestrator(config)
     orchestrator.processing_complete = False
-    
+
     try:
         orchestrator._process_recording(
             audio_path=audio_path,
@@ -499,7 +502,7 @@ def summarize(
             seed=seed,
         )
         orchestrator.processing_complete = True
-        
+
         # show completion message
         console.print(
             Panel(
@@ -524,7 +527,7 @@ def summarize(
 def devices() -> None:
     """list available audio input devices"""
     console.print("[bold]🎤 audio input devices[/bold]\n")
-    
+
     devices = list_audio_devices()
     if devices:
         print_devices(devices)
@@ -547,13 +550,14 @@ def setup() -> None:
             expand=False,
         )
     )
-    
+
     config = Config()
     models_dir = config.expand_path(config.get("paths", "models_dir", "~/.meetcap/models"))
-    
+
     # step 1: check ffmpeg
     console.print("\n[bold]step 1: checking dependencies[/bold]")
     import subprocess
+
     try:
         result = subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=2)
         if result.returncode == 0:
@@ -566,19 +570,19 @@ def setup() -> None:
         console.print("[red]✗[/red] ffmpeg not found")
         console.print("[yellow]please install: brew install ffmpeg[/yellow]")
         return
-    
+
     # step 2: test microphone permission
     console.print("\n[bold]step 2: microphone permission[/bold]")
     console.print("[cyan]testing microphone access...[/cyan]")
     console.print("[yellow]⚠ macos may prompt for microphone permission[/yellow]")
-    
+
     devices = list_audio_devices()
     if not devices:
         console.print("[red]✗[/red] no audio devices found")
         console.print("[yellow]grant microphone permission in system preferences[/yellow]")
         console.print("system preferences → privacy & security → microphone")
         return
-    
+
     # try a brief recording to trigger permission dialog
     console.print("[cyan]attempting test recording to verify permissions...[/cyan]")
     recorder = AudioRecorder()
@@ -589,11 +593,11 @@ def setup() -> None:
         )
         time.sleep(2)  # record for 2 seconds
         recorder.stop_recording()
-        
+
         # if we got here, permissions are granted
         console.print("[green]✓[/green] microphone permission granted")
         console.print(f"  detected {len(devices)} audio device(s)")
-        
+
         # clean up test file
         if test_path.exists():
             test_path.unlink()
@@ -602,45 +606,49 @@ def setup() -> None:
         console.print(f"  error: {e}")
         console.print("[yellow]grant permission in system preferences and run setup again[/yellow]")
         return
-    
+
     # step 3: test hotkey permission
     console.print("\n[bold]step 3: input monitoring permission (for hotkeys)[/bold]")
     console.print("[cyan]testing hotkey functionality...[/cyan]")
     console.print("[yellow]⚠ grant input monitoring permission if prompted[/yellow]")
-    
+
     # create a simple test for hotkey
     test_triggered = threading.Event()
-    
+
     def test_callback():
         test_triggered.set()
-    
+
     hotkey_mgr = HotkeyManager(test_callback)
     hotkey_mgr.start("<cmd>+<shift>+t")  # test hotkey
-    
+
     console.print("[cyan]press ⌘⇧T to test hotkey (or wait 5 seconds to skip)...[/cyan]")
-    
+
     if test_triggered.wait(timeout=5.0):
         console.print("[green]✓[/green] hotkey permission granted")
     else:
         console.print("[yellow]⚠[/yellow] hotkey not detected (permission may be needed)")
         console.print("  grant input monitoring in system preferences if you want hotkey support")
         console.print("  you can still use Ctrl-C to stop recordings")
-    
+
     hotkey_mgr.stop()
-    
+
     # step 4: select and download whisper model
     console.print("\n[bold]step 4: select whisper (speech-to-text) model[/bold]")
-    
+
     whisper_models = [
         {"name": "large-v3", "desc": "Most accurate, slower (default)", "size": "~1.5GB"},
-        {"name": "large-v3-turbo", "desc": "Faster than v3, slightly less accurate", "size": "~1.5GB"},
+        {
+            "name": "large-v3-turbo",
+            "desc": "Faster than v3, slightly less accurate",
+            "size": "~1.5GB",
+        },
         {"name": "small", "desc": "Fast, good for quick transcripts", "size": "~466MB"},
     ]
-    
+
     console.print("\n[cyan]available whisper models:[/cyan]")
     for i, model in enumerate(whisper_models, 1):
         console.print(f"  {i}. [bold]{model['name']}[/bold] - {model['desc']} ({model['size']})")
-    
+
     choice = typer.prompt("\nselect model (1-3)", default="1")
     try:
         model_idx = int(choice) - 1
@@ -648,44 +656,61 @@ def setup() -> None:
             stt_model_name = whisper_models[model_idx]["name"]
         else:
             stt_model_name = "large-v3"
-    except:
+    except ValueError:
         stt_model_name = "large-v3"
-    
+
     console.print(f"\n[cyan]selected: {stt_model_name}[/cyan]")
-    
+
     # download if needed
     if verify_whisper_model(stt_model_name, models_dir):
         console.print(f"[green]✓[/green] whisper {stt_model_name} already installed")
     else:
         console.print(f"[cyan]downloading whisper {stt_model_name}...[/cyan]")
         console.print("[dim]this may take several minutes[/dim]")
-        
+
         model_path = ensure_whisper_model(stt_model_name, models_dir)
-        
+
         if model_path:
-            console.print(f"[green]✓[/green] whisper model downloaded")
+            console.print("[green]✓[/green] whisper model downloaded")
             # update config with selected model
             config.config["models"]["stt_model_name"] = stt_model_name
-            config.config["models"]["stt_model_path"] = f"~/.meetcap/models/whisper-{stt_model_name}"
+            config.config["models"]["stt_model_path"] = (
+                f"~/.meetcap/models/whisper-{stt_model_name}"
+            )
             config.save()
         else:
-            console.print(f"[red]✗[/red] whisper download failed")
+            console.print("[red]✗[/red] whisper download failed")
             console.print("[yellow]check your internet connection and try again[/yellow]")
             return
-    
+
     # step 5: select and download llm model
     console.print("\n[bold]step 5: select llm (summarization) model[/bold]")
-    
+
     llm_models = [
-        {"key": "thinking", "name": "Qwen3-4B-Thinking", "desc": "Best for meeting summaries (default)", "size": "~4-5GB"},
-        {"key": "instruct", "name": "Qwen3-4B-Instruct", "desc": "General purpose, follows instructions", "size": "~4-5GB"},
-        {"key": "gpt-oss", "name": "GPT-OSS-20B", "desc": "Larger model, more capable", "size": "~11GB"},
+        {
+            "key": "thinking",
+            "name": "Qwen3-4B-Thinking",
+            "desc": "Best for meeting summaries (default)",
+            "size": "~4-5GB",
+        },
+        {
+            "key": "instruct",
+            "name": "Qwen3-4B-Instruct",
+            "desc": "General purpose, follows instructions",
+            "size": "~4-5GB",
+        },
+        {
+            "key": "gpt-oss",
+            "name": "GPT-OSS-20B",
+            "desc": "Larger model, more capable",
+            "size": "~11GB",
+        },
     ]
-    
+
     console.print("\n[cyan]available llm models:[/cyan]")
     for i, model in enumerate(llm_models, 1):
         console.print(f"  {i}. [bold]{model['name']}[/bold] - {model['desc']} ({model['size']})")
-    
+
     choice = typer.prompt("\nselect model (1-3)", default="1")
     try:
         model_idx = int(choice) - 1
@@ -693,40 +718,40 @@ def setup() -> None:
             llm_choice = llm_models[model_idx]
         else:
             llm_choice = llm_models[0]
-    except:
+    except ValueError:
         llm_choice = llm_models[0]
-    
+
     console.print(f"\n[cyan]selected: {llm_choice['name']}[/cyan]")
-    
+
     # map choice to filename
     model_filenames = {
         "thinking": "Qwen3-4B-Thinking-2507-Q8_K_XL.gguf",
         "instruct": "Qwen3-4B-Instruct-2507-Q8_K_XL.gguf",
         "gpt-oss": "gpt-oss-20b-Q4_K_M.gguf",
     }
-    
+
     model_filename = model_filenames[llm_choice["key"]]
     model_path = models_dir / model_filename
-    
+
     # check if already exists
     if model_path.exists():
         file_size_mb = model_path.stat().st_size / (1024 * 1024)
         if file_size_mb > 100:
             console.print(f"[green]✓[/green] {llm_choice['name']} already installed")
         else:
-            console.print(f"[yellow]⚠[/yellow] model file seems incomplete, re-downloading")
+            console.print("[yellow]⚠[/yellow] model file seems incomplete, re-downloading")
             model_path = None
     else:
         model_path = None
-    
+
     if not model_path:
         console.print(f"[cyan]downloading {llm_choice['name']} ({llm_choice['size']})...[/cyan]")
         console.print("[yellow]⚠ this is a large download and may take 10-30 minutes[/yellow]")
-        
+
         # ask for confirmation
         if typer.confirm("proceed with download?"):
             model_path = ensure_qwen_model(models_dir, model_choice=llm_choice["key"])
-            
+
             if model_path:
                 console.print(f"[green]✓[/green] {llm_choice['name']} downloaded")
                 # update config with selected model
@@ -739,7 +764,7 @@ def setup() -> None:
                 return
         else:
             console.print("[yellow]skipped llm download (summarization will not work)[/yellow]")
-    
+
     # final summary
     console.print(
         Panel(
@@ -756,12 +781,13 @@ def setup() -> None:
 def verify() -> None:
     """quick verification of system setup"""
     console.print("[bold]🔍 system verification[/bold]\n")
-    
+
     config = Config()
     checks = []
-    
+
     # check ffmpeg
     import subprocess
+
     try:
         result = subprocess.run(
             ["ffmpeg", "-version"],
@@ -776,60 +802,62 @@ def verify() -> None:
         checks.append(("ffmpeg", "❌ not found", "red"))
     except Exception:
         checks.append(("ffmpeg", "⚠️ unknown", "yellow"))
-    
+
     # check audio devices
     devices = list_audio_devices()
     if devices:
         aggregate_found = any(d.is_aggregate for d in devices)
         if aggregate_found:
-            checks.append(("audio devices", f"✅ {len(devices)} found (aggregate detected)", "green"))
+            checks.append(
+                ("audio devices", f"✅ {len(devices)} found (aggregate detected)", "green")
+            )
         else:
             checks.append(("audio devices", f"⚠️ {len(devices)} found (no aggregate)", "yellow"))
     else:
         checks.append(("audio devices", "❌ none found", "red"))
-    
+
     # check microphone permission
     if PermissionChecker.check_microphone_permission():
         checks.append(("microphone", "✅ permission likely granted", "green"))
     else:
         checks.append(("microphone", "⚠️ permission unknown", "yellow"))
-    
+
     # check whisper model (no download)
     stt_model_name = config.get("models", "stt_model_name", "large-v3")
     models_dir = config.expand_path(config.get("paths", "models_dir", "~/.meetcap/models"))
-    
+
     if verify_whisper_model(stt_model_name, models_dir):
         checks.append(("stt model", f"✅ {stt_model_name} ready", "green"))
     else:
         checks.append(("stt model", f"❌ {stt_model_name} not found", "red"))
-    
+
     # check qwen llm model (no download)
     if verify_qwen_model(models_dir):
-        checks.append(("llm model", f"✅ Qwen3-4B ready", "green"))
+        checks.append(("llm model", "✅ Qwen3-4B ready", "green"))
     else:
-        checks.append(("llm model", f"❌ Qwen3-4B not found", "red"))
-    
+        checks.append(("llm model", "❌ Qwen3-4B not found", "red"))
+
     # check output directory
     out_dir = config.expand_path(config.get("paths", "out_dir"))
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
-        checks.append(("output dir", f"✅ writable", "green"))
+        checks.append(("output dir", "✅ writable", "green"))
     except Exception as e:
         checks.append(("output dir", f"❌ error: {e}", "red"))
-    
+
     # display results
     table = Table(show_header=True, header_style="bold")
     table.add_column("component", style="cyan")
     table.add_column("status")
-    
+
     all_good = True
     for component, status, color in checks:
         table.add_row(component, f"[{color}]{status}[/{color}]")
         if color == "red":
             all_good = False
-    
+
     console.print(table)
-    
+
     if not all_good:
         console.print("\n[yellow]⚠ some components are missing or need attention[/yellow]")
         console.print("run 'meetcap setup' to install models and configure permissions")

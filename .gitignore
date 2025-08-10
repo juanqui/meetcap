@@ -69,6 +69,7 @@ models/
 # Local Dev
 .mcp.json
 docs/specs/
+coverage.xml
 
 # Samples
 samples/
