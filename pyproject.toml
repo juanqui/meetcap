@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "meetcap"
-version = "1.0.0"
+dynamic = ["version"]
 description = "Offline meeting recorder & summarizer for macOS"
 readme = "README.md"
 license = "MIT"
@@ -12,6 +12,9 @@ requires-python = ">=3.10"
 authors = [
     { name = "Juan", email = "juan@example.com" }
 ]
+homepage = "https://github.com/juanqui/meetcap"
+repository = "https://github.com/juanqui/meetcap"
+issues = "https://github.com/juanqui/meetcap/issues"
 keywords = ["meeting", "recorder", "transcription", "summarization", "macos"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -49,6 +52,7 @@ dev = [
     "ruff>=0.1.8",
     "mypy>=1.7.1",
     "coverage[toml]>=7.3.2",
+    "bump2version>=1.0.0",
 ]
 stt = [
     "faster-whisper>=0.10.0",
@@ -68,6 +72,7 @@ dependencies = [
     "ruff>=0.1.8",
     "mypy>=1.7.1",
     "coverage[toml]>=7.3.2",
+    "bump2version>=1.0.0",
 ]
 
 [tool.hatch.envs.default.scripts]
@@ -88,6 +93,9 @@ lint = [
 record = "python -m meetcap.cli record {args}"
 devices = "python -m meetcap.cli devices {args}"
 verify = "python -m meetcap.cli verify {args}"
+
+[tool.hatch.version]
+path = "meetcap/__init__.py"
 
 [tool.black]
 line-length = 100
