@@ -1,0 +1,74 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# Hatch
+.hatch/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+.coverage
+.pytest_cache/
+htmlcov/
+.tox/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Logs
+*.log
+
+# Output files
+*.wav
+*.transcript.txt
+*.transcript.json
+*.summary.md
+Recordings/
+
+# Config (keep example)
+.meetcap/
+!.meetcap/config.example.toml
+
+# Models (too large for git)
+models/
+*.gguf
+*.ggml
+*.bin
+
+# Local Dev
+.mcp.json
+docs/specs/
+
+# Samples
+samples/
