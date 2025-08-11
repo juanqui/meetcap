@@ -72,7 +72,7 @@ class TestSummarizationService:
             mock_constructor.assert_called_once()
             call_kwargs = mock_constructor.call_args[1]
             assert call_kwargs["model_path"] == str(model_file)
-            assert call_kwargs["n_ctx"] == 8192
+            assert call_kwargs["n_ctx"] == 32768
 
         # verify console output was called
         # mock_console.print.assert_called() - skip console check for now

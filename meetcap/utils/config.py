@@ -41,7 +41,7 @@ class Config:
             "models_dir": "~/.meetcap/models",  # directory for auto-downloaded models
         },
         "llm": {
-            "n_ctx": 8192,
+            "n_ctx": 32768,  # default context size (32k tokens)
             "n_threads": 6,
             "n_gpu_layers": 35,
             "n_batch": 1024,
@@ -72,6 +72,7 @@ class Config:
         # load from file if exists
         if self.config_path.exists():
             self._load_from_file()
+            self._migrate_config()  # apply any necessary migrations
 
         # apply environment variable overrides
         self._apply_env_overrides()
@@ -129,6 +130,15 @@ class Config:
                 self._deep_merge(base[key], value)
             else:
                 base[key] = value
+
+    def _migrate_config(self) -> None:
+        """apply config migrations for backward compatibility."""
+        # migrate n_ctx from 8192 to 32768 if it's still at the old default
+        if self.config.get("llm", {}).get("n_ctx") == 8192:
+            console.print("[dim]migrating context size from 8k to 32k...[/dim]")
+            self.config["llm"]["n_ctx"] = 32768
+            # save the migration immediately
+            self.save()
 
     def get(self, section: str, key: str, default: Any = None) -> Any:
         """

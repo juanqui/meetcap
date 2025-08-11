@@ -16,7 +16,7 @@ class SummarizationService:
     def __init__(
         self,
         model_path: str,
-        n_ctx: int = 8192,
+        n_ctx: int = 32768,
         n_threads: int = 6,
         n_gpu_layers: int = 35,
         n_batch: int = 1024,

@@ -372,12 +372,12 @@ class RecordingOrchestrator:
 
         llm_service = SummarizationService(
             model_path=llm_path,
-            n_ctx=llm_config.get("n_ctx", 8192),
+            n_ctx=llm_config.get("n_ctx", 32768),
             n_threads=llm_config.get("n_threads", 6),
             n_gpu_layers=llm_config.get("n_gpu_layers", 35),
             n_batch=llm_config.get("n_batch", 1024),
             temperature=llm_config.get("temperature", 0.4),
-            max_tokens=llm_config.get("max_tokens", 2048),
+            max_tokens=llm_config.get("max_tokens", 4096),
             seed=seed,
         )
 
@@ -854,8 +854,55 @@ def setup() -> None:
         config.config["models"]["stt_model_path"] = f"~/.meetcap/models/whisper-{stt_model_name}"
         config.save()
 
-    # step 5: select and download llm model
-    console.print("\n[bold]step 5: select llm (summarization) model[/bold]")
+    # step 5: select context size for llm
+    console.print("\n[bold]step 5: select llm context size[/bold]")
+    console.print(
+        "[cyan]context size determines how much transcript can be processed at once[/cyan]"
+    )
+
+    # check current configuration
+    current_ctx = config.get("llm", "n_ctx", 32768)
+
+    context_sizes = [
+        {"size": 16384, "label": "16k", "desc": "~30 min meetings"},
+        {"size": 32768, "label": "32k", "desc": "~1 hour meetings (recommended)"},
+        {"size": 65536, "label": "64k", "desc": "~2 hour meetings"},
+        {"size": 131072, "label": "128k", "desc": "3+ hour meetings"},
+    ]
+
+    console.print("\n[cyan]available context sizes:[/cyan]")
+    for i, ctx in enumerate(context_sizes, 1):
+        is_current = ctx["size"] == current_ctx
+        current_marker = " [green](current)[/green]" if is_current else ""
+        console.print(f"  {i}. [bold]{ctx['label']}[/bold] - {ctx['desc']}{current_marker}")
+
+    # find default choice based on current config
+    default_idx = next(
+        (i for i, ctx in enumerate(context_sizes, 1) if ctx["size"] == current_ctx), 2
+    )
+
+    choice = typer.prompt("\nselect context size (1-4)", default=str(default_idx))
+    try:
+        ctx_idx = int(choice) - 1
+        if 0 <= ctx_idx < len(context_sizes):
+            selected_ctx = context_sizes[ctx_idx]
+        else:
+            selected_ctx = context_sizes[1]  # default to 32k
+    except ValueError:
+        selected_ctx = context_sizes[1]  # default to 32k
+
+    console.print(f"\n[cyan]selected: {selected_ctx['label']} ({selected_ctx['desc']})[/cyan]")
+
+    # update config if changed
+    if selected_ctx["size"] != current_ctx:
+        config.config["llm"]["n_ctx"] = selected_ctx["size"]
+        config.save()
+        console.print(f"[green]✓[/green] context size updated to {selected_ctx['label']}")
+    else:
+        console.print(f"[green]✓[/green] keeping current context size of {selected_ctx['label']}")
+
+    # step 6: select and download llm model
+    console.print("\n[bold]step 6: select llm (summarization) model[/bold]")
 
     llm_models = [
         {
@@ -940,6 +987,7 @@ def setup() -> None:
     console.print(
         Panel(
             "[green]✅ setup complete![/green]\n\n"
+            f"context size: {selected_ctx['label']} ({selected_ctx['desc']})\n"
             "you're ready to start recording meetings:\n"
             "[cyan]meetcap record[/cyan]",
             title="🎉 success",

@@ -291,9 +291,11 @@ class TestConfig:
         abs_path = config.expand_path("/absolute/path")
         assert str(abs_path) == "/absolute/path"
 
-    def test_default_config_values(self):
+    def test_default_config_values(self, tmp_path):
         """test default configuration values"""
-        config = Config()
+        # use a non-existent config file to ensure we're testing defaults
+        config_path = tmp_path / "nonexistent" / "config.toml"
+        config = Config(config_path)
 
         # audio defaults
         assert config.get("audio", "preferred_device") == "Aggregate Device"
@@ -312,7 +314,7 @@ class TestConfig:
         assert ".meetcap/models" in config.get("paths", "models_dir")
 
         # llm defaults
-        assert config.get("llm", "n_ctx") == 8192
+        assert config.get("llm", "n_ctx") == 32768
         assert config.get("llm", "temperature") == 0.4
         assert config.get("llm", "max_tokens") == 4096
 

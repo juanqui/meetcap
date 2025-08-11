@@ -472,16 +472,25 @@ class TestCLICommands:
         # Mock all external dependencies at once to speed up test
         with patch("meetcap.cli.Config") as mock_config_class:
             mock_config = Mock()
-            mock_config.get.return_value = "~/.meetcap/models"
+            mock_config.get.side_effect = lambda section, key, default=None: {
+                ("llm", "n_ctx"): 32768,
+                ("paths", "models_dir"): "~/.meetcap/models",
+            }.get((section, key), default)
             mock_config.expand_path.return_value = Path("/mock/models")
-            mock_config.config = {"models": {}, "paths": {"models_dir": "~/.meetcap/models"}}
+            mock_config.config = {
+                "models": {},
+                "paths": {"models_dir": "~/.meetcap/models"},
+                "llm": {"n_ctx": 32768},
+            }
             mock_config_class.return_value = mock_config
 
             # Mock all system calls and external dependencies comprehensively
             patches = [
                 patch("subprocess.run", return_value=Mock(returncode=0)),
                 patch("platform.processor", return_value="arm"),
-                patch("typer.prompt", side_effect=["1", "1", "1"]),  # User choices
+                patch(
+                    "typer.prompt", side_effect=["1", "1", "2", "1"]
+                ),  # User choices: engine, whisper model, context size, llm model
                 patch("typer.confirm", return_value=True),
                 patch("time.sleep"),  # Mock time.sleep
                 patch("threading.Event.wait", return_value=False),  # Mock hotkey timeout
