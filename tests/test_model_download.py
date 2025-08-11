@@ -4,8 +4,10 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from meetcap.services.model_download import (
+    ensure_mlx_whisper_model,
     ensure_qwen_model,
     ensure_whisper_model,
+    verify_mlx_whisper_model,
     verify_qwen_model,
     verify_whisper_model,
 )
@@ -91,3 +93,102 @@ class TestEnsureFunctions:
         result = ensure_qwen_model(temp_dir, model_choice="invalid-model")
         # Should either return None (if invalid) or a Path (if it somehow worked)
         assert result is None or isinstance(result, str | Path)
+
+
+class TestMlxWhisperFunctions:
+    """test mlx-whisper model functions"""
+
+    @patch("meetcap.services.model_download.console")
+    def test_verify_mlx_whisper_model_no_import(self, mock_console):
+        """test verifying mlx-whisper model without mlx-whisper installed"""
+        with patch("importlib.util.find_spec", return_value=None):
+            result = verify_mlx_whisper_model("mlx-community/whisper-large-v3-turbo")
+            assert result is False
+
+    @patch("meetcap.services.model_download.console")
+    def test_verify_mlx_whisper_model_not_arm(self, mock_console):
+        """test verifying mlx-whisper model on non-ARM processor"""
+        with patch("importlib.util.find_spec", return_value=Mock()):
+            with patch("platform.processor", return_value="x86_64"):
+                result = verify_mlx_whisper_model("mlx-community/whisper-large-v3-turbo")
+                assert result is False
+
+    @patch("meetcap.services.model_download.console")
+    def test_verify_mlx_whisper_model_success(self, mock_console):
+        """test successful mlx-whisper model verification"""
+        mock_mlx_whisper = Mock()
+
+        with patch("importlib.util.find_spec", return_value=Mock()):
+            with patch("platform.processor", return_value="arm"):
+                # Mock sys.modules to provide our mock when imported
+                with patch.dict("sys.modules", {"mlx_whisper": mock_mlx_whisper}):
+                    result = verify_mlx_whisper_model("mlx-community/whisper-large-v3-turbo")
+                    assert result is True
+                    mock_mlx_whisper.transcribe.assert_called_once()
+
+    @patch("meetcap.services.model_download.console")
+    def test_verify_mlx_whisper_model_load_error(self, mock_console):
+        """test mlx-whisper model verification with load error"""
+        mock_mlx_whisper = Mock()
+        mock_mlx_whisper.transcribe.side_effect = Exception("Model load failed")
+
+        with patch("importlib.util.find_spec", return_value=Mock()):
+            with patch("platform.processor", return_value="arm"):
+                # Mock sys.modules to provide our mock when imported
+                with patch.dict("sys.modules", {"mlx_whisper": mock_mlx_whisper}):
+                    result = verify_mlx_whisper_model("mlx-community/whisper-large-v3-turbo")
+                    assert result is False
+
+    @patch("meetcap.services.model_download.Progress")
+    @patch("meetcap.services.model_download.console")
+    def test_ensure_mlx_whisper_model_no_import(self, mock_console, mock_progress, temp_dir):
+        """test ensuring mlx-whisper model without mlx-whisper installed"""
+        # Create a side effect that raises ImportError only for mlx_whisper
+        original_import = __builtins__["__import__"]
+
+        def mock_import(name, *args, **kwargs):
+            if name == "mlx_whisper":
+                raise ImportError("No module named 'mlx_whisper'")
+            return original_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=mock_import):
+            result = ensure_mlx_whisper_model("mlx-community/whisper-large-v3-turbo", temp_dir)
+            assert result is None
+
+    @patch("meetcap.services.model_download.Progress")
+    @patch("meetcap.services.model_download.console")
+    def test_ensure_mlx_whisper_model_exists(self, mock_console, mock_progress, temp_dir):
+        """test ensuring existing mlx-whisper model"""
+        # When models_dir is provided, the function uses it directly without adding "mlx-whisper" subdir
+        model_dir = temp_dir / "mlx-community--whisper-large-v3-turbo"
+        model_dir.mkdir(parents=True)
+
+        result = ensure_mlx_whisper_model("mlx-community/whisper-large-v3-turbo", temp_dir)
+        assert result == model_dir
+
+    @patch("meetcap.services.model_download.Progress")
+    @patch("meetcap.services.model_download.console")
+    def test_ensure_mlx_whisper_model_download_success(self, mock_console, mock_progress, temp_dir):
+        """test successful mlx-whisper model download"""
+        mock_mlx_whisper = Mock()
+
+        # Mock sys.modules to provide our mock when imported
+        with patch.dict("sys.modules", {"mlx_whisper": mock_mlx_whisper}):
+            result = ensure_mlx_whisper_model("mlx-community/whisper-large-v3-turbo", temp_dir)
+
+            # When models_dir is provided, the function uses it directly without adding "mlx-whisper" subdir
+            expected_path = temp_dir / "mlx-community--whisper-large-v3-turbo"
+            assert result == expected_path
+            mock_mlx_whisper.transcribe.assert_called_once()
+
+    @patch("meetcap.services.model_download.Progress")
+    @patch("meetcap.services.model_download.console")
+    def test_ensure_mlx_whisper_model_download_error(self, mock_console, mock_progress, temp_dir):
+        """test mlx-whisper model download error"""
+        mock_mlx_whisper = Mock()
+        mock_mlx_whisper.transcribe.side_effect = Exception("Download failed")
+
+        # Mock sys.modules to provide our mock when imported
+        with patch.dict("sys.modules", {"mlx_whisper": mock_mlx_whisper}):
+            result = ensure_mlx_whisper_model("mlx-community/whisper-large-v3-turbo", temp_dir)
+            assert result is None

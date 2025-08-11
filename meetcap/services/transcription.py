@@ -380,6 +380,175 @@ class WhisperCppService(TranscriptionService):
         return hours * 3600 + minutes * 60 + seconds
 
 
+class MlxWhisperService(TranscriptionService):
+    """transcription using mlx-whisper library (Apple Silicon optimized)"""
+
+    def __init__(
+        self,
+        model_name: str = "mlx-community/whisper-large-v3-turbo",
+        model_path: str | None = None,
+        language: str | None = None,
+        auto_download: bool = True,
+    ):
+        """
+        initialize mlx-whisper service.
+
+        args:
+            model_name: hugging face model name (e.g., 'mlx-community/whisper-large-v3-turbo')
+            model_path: local path to model directory (optional)
+            language: force language code (e.g., 'en') or none for auto-detect
+            auto_download: whether to auto-download model if not found
+        """
+        self.model_name = model_name
+        self.model_path = None
+        self.auto_download = auto_download
+        self.language = language
+        self.model = None
+        self.model_source = None
+
+        # if model_path provided, use it directly
+        if model_path:
+            self.model_path = Path(model_path).expanduser()
+
+    def _load_model(self):
+        """lazy load the model on first use."""
+        if self.model is not None:
+            return
+
+        try:
+            import mlx_whisper  # noqa: F401
+        except ImportError as e:
+            raise ImportError(
+                "mlx-whisper not installed. install with: pip install mlx-whisper"
+            ) from e
+
+        # determine model source
+        if self.model_path and self.model_path.exists():
+            self.model_source = str(self.model_path)
+            console.print(f"[cyan]using mlx-whisper model from {self.model_path}...[/cyan]")
+        elif self.auto_download:
+            self.model_source = self.model_name
+            console.print(f"[cyan]using mlx-whisper model '{self.model_name}'...[/cyan]")
+        else:
+            raise FileNotFoundError(
+                f"mlx-whisper model not found and auto-download disabled. "
+                f"path: {self.model_path}, name: {self.model_name}"
+            )
+
+        # mlx-whisper doesn't have a separate model loading step
+        # model loading happens automatically during transcription
+        self.model = "loaded"  # just mark as ready
+        console.print("[green]✓[/green] mlx-whisper model ready")
+
+    def transcribe(self, audio_path: Path) -> TranscriptResult:
+        """
+        transcribe audio file using mlx-whisper.
+
+        args:
+            audio_path: path to audio file
+
+        returns:
+            transcription result with segments
+        """
+        if not audio_path.exists():
+            raise FileNotFoundError(f"audio file not found: {audio_path}")
+
+        # load model if needed
+        self._load_model()
+
+        console.print(f"[cyan]transcribing {audio_path.name} with mlx-whisper...[/cyan]")
+        start_time = time.time()
+
+        # run transcription
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True,
+        ) as progress:
+            task = progress.add_task("transcribing audio...", total=None)
+
+            try:
+                import mlx_whisper
+
+                # transcribe with mlx-whisper
+                result = mlx_whisper.transcribe(
+                    str(audio_path),
+                    path_or_hf_repo=self.model_source,
+                    language=self.language,
+                    word_timestamps=True,  # enable word-level timestamps
+                )
+
+                progress.update(task, description="processing segments...")
+
+                # convert mlx-whisper output to our format
+                segments_list = []
+                if "segments" in result:
+                    for i, segment in enumerate(result["segments"]):
+                        segments_list.append(
+                            TranscriptSegment(
+                                id=i,
+                                start=segment.get("start", 0.0),
+                                end=segment.get("end", 0.0),
+                                text=segment.get("text", "").strip(),
+                            )
+                        )
+                else:
+                    # fallback: create single segment from full text
+                    segments_list.append(
+                        TranscriptSegment(
+                            id=0,
+                            start=0.0,
+                            end=0.0,  # we don't know the duration
+                            text=result.get("text", "").strip(),
+                        )
+                    )
+
+                detected_language = result.get("language", "unknown")
+
+            except Exception as e:
+                console.print(f"[red]mlx-whisper transcription failed: {e}[/red]")
+                # fallback to faster-whisper if available
+                console.print("[yellow]falling back to faster-whisper...[/yellow]")
+                try:
+                    fallback_service = FasterWhisperService(
+                        model_name="large-v3",
+                        language=self.language,
+                        auto_download=True,
+                    )
+                    return fallback_service.transcribe(audio_path)
+                except Exception as fallback_error:
+                    raise RuntimeError(
+                        f"both mlx-whisper and faster-whisper failed. "
+                        f"mlx error: {e}, fallback error: {fallback_error}"
+                    ) from e
+
+        # calculate duration
+        duration = time.time() - start_time
+        audio_duration = segments_list[-1].end if segments_list else 0.0
+
+        console.print(
+            f"[green]✓[/green] mlx-whisper transcription complete: "
+            f"{len(segments_list)} segments in {duration:.1f}s "
+            f"(speed: {audio_duration / duration:.1f}x)"
+            if audio_duration > 0
+            else ""
+        )
+
+        return TranscriptResult(
+            audio_path=str(audio_path),
+            sample_rate=48000,  # we know our recording format
+            language=detected_language,
+            segments=segments_list,
+            duration=audio_duration,
+            stt={
+                "engine": "mlx-whisper",
+                "model_name": self.model_name,
+                "model_path": str(self.model_path) if self.model_path else None,
+            },
+        )
+
+
 def save_transcript(result: TranscriptResult, base_path: Path) -> tuple[Path, Path]:
     """
     save transcript to text and json files.

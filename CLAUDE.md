@@ -37,9 +37,11 @@ meetcap/
 - No telemetry or external dependencies
 
 ### Transcription
-- Primary: faster-whisper with Metal acceleration
+- Primary (Apple Silicon): mlx-whisper with MLX acceleration
+- Fallback: faster-whisper with Metal acceleration
 - Alternative: whisper.cpp CLI
 - Outputs both plain text and JSON with timestamps
+- Automatic fallback from mlx-whisper to faster-whisper on errors
 
 ### Summarization
 - Qwen3-4B-Thinking model via llama-cpp-python
@@ -55,11 +57,13 @@ meetcap/
 hatch env create
 
 # Run CLI commands
-hatch run meetcap record         # Record from audio device
-hatch run meetcap summarize      # Process existing audio file
-hatch run meetcap devices        # List audio devices
-hatch run meetcap verify         # Quick verification
-hatch run meetcap setup          # Interactive setup wizard
+hatch run meetcap record                    # Record from audio device
+hatch run meetcap record --stt mlx          # Record with mlx-whisper (Apple Silicon)
+hatch run meetcap summarize                 # Process existing audio file
+hatch run meetcap summarize --stt mlx       # Process with mlx-whisper
+hatch run meetcap devices                   # List audio devices
+hatch run meetcap verify                    # Quick verification
+hatch run meetcap setup                     # Interactive setup wizard
 
 # Run tests
 hatch run test
@@ -98,14 +102,18 @@ Default config location: `~/.meetcap/config.toml`
 
 Key settings:
 - `audio.preferred_device`: Default audio device name
-- `models.stt_model_path`: Path to Whisper model
+- `models.stt_engine`: STT engine (faster-whisper or mlx-whisper)
+- `models.stt_model_path`: Path to Whisper model (faster-whisper)
+- `models.mlx_stt_model_name`: MLX Whisper model name
 - `models.llm_gguf_path`: Path to Qwen GGUF model
 - `paths.out_dir`: Output directory for recordings
 - `hotkey.stop`: Hotkey combination to stop recording
 
 Environment variable overrides:
 - `MEETCAP_DEVICE`
-- `MEETCAP_STT_MODEL`
+- `MEETCAP_STT_ENGINE`: STT engine to use
+- `MEETCAP_STT_MODEL`: Faster-whisper model path
+- `MEETCAP_MLX_STT_MODEL`: MLX-whisper model name
 - `MEETCAP_LLM_MODEL`
 - `MEETCAP_OUT_DIR`
 
@@ -129,8 +137,15 @@ Environment variable overrides:
 Models are selected and downloaded during `meetcap setup`:
 
 ### Whisper Models (Speech-to-Text)
-1. **large-v3** (default, ~1.5GB) - Most accurate, slower
-2. **large-v3-turbo** (~1.5GB) - Faster than v3, slightly less accurate  
+
+**MLX-Whisper Models (Apple Silicon recommended):**
+1. **mlx-community/whisper-large-v3-turbo** (default on Apple Silicon, ~1.5GB) - Fast and accurate
+2. **mlx-community/whisper-large-v3-mlx** (~1.5GB) - Most accurate MLX version
+3. **mlx-community/whisper-small-mlx** (~466MB) - Smallest, fastest
+
+**Faster-Whisper Models (universal compatibility):**
+1. **large-v3** (default on non-Apple Silicon, ~1.5GB) - Most accurate, slower
+2. **large-v3-turbo** (~1.5GB) - Faster than v3, slightly less accurate
 3. **small** (~466MB) - Fast, good for quick transcripts
 
 ### LLM Models (Summarization)
@@ -140,7 +155,9 @@ Models are selected and downloaded during `meetcap setup`:
 
 All models stored in: `~/.meetcap/models/`
 Can override with environment variables:
-- `MEETCAP_STT_MODEL` - Whisper model name
+- `MEETCAP_STT_ENGINE` - Choose stt engine (faster-whisper or mlx-whisper)
+- `MEETCAP_STT_MODEL` - Faster-whisper model name
+- `MEETCAP_MLX_STT_MODEL` - MLX-whisper model name
 - `MEETCAP_LLM_MODEL` - Path to GGUF file
 
 ## Troubleshooting
@@ -164,6 +181,33 @@ Can override with environment variables:
 - Type hints throughout
 - Lowercase comments
 - Rich console output for UX
+
+## Commit Message Style
+Follow conventional commit format with semantic prefixes:
+
+```
+feat: add new feature (new functionality)
+fix: bug fixes
+chore: maintenance tasks, deps, tooling
+docs: documentation changes
+refactor: code restructuring without behavior change
+test: add or update tests
+```
+
+Structure: `type: brief description`
+
+Multi-line format:
+```
+feat: add mlx-whisper support for Apple Silicon optimization
+
+- Add MlxWhisperService for faster transcription
+- Update model download system to support mlx-whisper
+- Fix CLI to respect configured STT engine
+- Add comprehensive tests and documentation
+- Maintain backward compatibility with fallback
+```
+
+**Important**: Do not mention Claude or AI assistance in commit messages.
 
 ## Important Implementation Notes
 - Subprocess management for ffmpeg is critical

@@ -28,8 +28,11 @@ class Config:
             "stop": "<cmd>+<shift>+s",
         },
         "models": {
+            "stt_engine": "faster-whisper",  # stt engine: faster-whisper or mlx-whisper
             "stt_model_name": "large-v3",  # whisper model name for auto-download
             "stt_model_path": "~/.meetcap/models/whisper-large-v3",  # will be created automatically
+            "mlx_stt_model_name": "mlx-community/whisper-large-v3-turbo",  # mlx whisper model
+            "mlx_stt_model_path": "~/.meetcap/models/mlx-whisper",  # mlx models directory
             "llm_model_name": "Qwen3-4B-Thinking-2507-Q8_K_XL.gguf",  # qwen model name
             "llm_gguf_path": "~/.meetcap/models/Qwen3-4B-Thinking-2507-Q8_K_XL.gguf",  # auto-download path
         },
@@ -92,7 +95,9 @@ class Config:
             "MEETCAP_SAMPLE_RATE": ("audio", "sample_rate", int),
             "MEETCAP_CHANNELS": ("audio", "channels", int),
             "MEETCAP_HOTKEY": ("hotkey", "stop"),
+            "MEETCAP_STT_ENGINE": ("models", "stt_engine"),
             "MEETCAP_STT_MODEL": ("models", "stt_model_path"),
+            "MEETCAP_MLX_STT_MODEL": ("models", "mlx_stt_model_name"),
             "MEETCAP_LLM_MODEL": ("models", "llm_gguf_path"),
             "MEETCAP_OUT_DIR": ("paths", "out_dir"),
             "MEETCAP_N_CTX": ("llm", "n_ctx", int),

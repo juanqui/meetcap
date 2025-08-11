@@ -70,6 +70,7 @@ models/
 .mcp.json
 docs/specs/
 coverage.xml
+.coverage*
 
 # Samples
 samples/

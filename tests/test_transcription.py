@@ -9,6 +9,7 @@ import pytest
 
 from meetcap.services.transcription import (
     FasterWhisperService,
+    MlxWhisperService,
     TranscriptionService,
     TranscriptResult,
     TranscriptSegment,
@@ -467,3 +468,159 @@ class TestSaveTranscript:
         with open(json_path, encoding="utf-8") as f:
             json_data = json.load(f)
         assert json_data["segments"][0]["text"] == "你好世界"
+
+
+class TestMlxWhisperService:
+    """test mlx-whisper transcription service"""
+
+    @pytest.fixture
+    def audio_file(self, temp_dir):
+        """create a mock audio file"""
+        audio_path = temp_dir / "test.wav"
+        audio_path.write_bytes(b"fake audio data")
+        return audio_path
+
+    def test_init_with_model_name(self):
+        """test initialization with model name"""
+        service = MlxWhisperService(
+            model_name="mlx-community/whisper-large-v3-turbo", language="en", auto_download=True
+        )
+
+        assert service.model_name == "mlx-community/whisper-large-v3-turbo"
+        assert service.language == "en"
+        assert service.auto_download is True
+        assert service.model is None  # lazy loading
+
+    def test_init_with_model_path(self, temp_dir):
+        """test initialization with model path"""
+        model_path = temp_dir / "mlx-model"
+        model_path.mkdir()
+
+        service = MlxWhisperService(
+            model_name="mlx-community/whisper-large-v3-turbo", model_path=str(model_path)
+        )
+
+        assert service.model_path == model_path
+        assert service.model_name == "mlx-community/whisper-large-v3-turbo"
+
+    def test_load_model_import_error(self, mock_console):
+        """test handling import error when mlx-whisper not installed"""
+        service = MlxWhisperService()
+
+        # Create a side effect that raises ImportError only for mlx_whisper
+        original_import = __builtins__["__import__"]
+
+        def mock_import(name, *args, **kwargs):
+            if name == "mlx_whisper":
+                raise ImportError("No module named 'mlx_whisper'")
+            return original_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=mock_import):
+            with pytest.raises(ImportError) as exc:
+                service._load_model()
+
+            assert "mlx-whisper not installed" in str(exc.value)
+
+    def test_load_model_success(self, mock_console):
+        """test successful model loading"""
+        service = MlxWhisperService(
+            model_name="mlx-community/whisper-large-v3-turbo", auto_download=True
+        )
+
+        # Mock sys.modules to provide our mock when imported
+        mock_mlx_whisper = Mock()
+        with patch.dict("sys.modules", {"mlx_whisper": mock_mlx_whisper}):
+            service._load_model()
+
+        # mlx-whisper doesn't have load_models, just check model is marked ready
+        assert service.model == "loaded"
+
+    def test_transcribe_with_segments(self, audio_file, mock_console):
+        """test transcription with segment output"""
+        # Create mock mlx_whisper and set up transcribe response with segments
+        mock_mlx_whisper = Mock()
+        mock_result = {
+            "text": "Hello world this is a test",
+            "language": "en",
+            "segments": [
+                {"start": 0.0, "end": 2.0, "text": "Hello world"},
+                {"start": 2.0, "end": 4.0, "text": " this is a test"},
+            ],
+        }
+        mock_mlx_whisper.transcribe.return_value = mock_result
+
+        service = MlxWhisperService(model_name="mlx-community/whisper-large-v3-turbo")
+
+        # Mock sys.modules to provide our mock when imported
+        with patch.dict("sys.modules", {"mlx_whisper": mock_mlx_whisper}):
+            result = service.transcribe(audio_file)
+
+        assert isinstance(result, TranscriptResult)
+        assert result.audio_path == str(audio_file)
+        assert result.language == "en"
+        assert len(result.segments) == 2
+        assert result.segments[0].text == "Hello world"
+        assert result.segments[0].start == 0.0
+        assert result.segments[0].end == 2.0
+        assert result.stt["engine"] == "mlx-whisper"
+
+    def test_transcribe_text_only(self, audio_file, mock_console):
+        """test transcription with text-only output"""
+        # Create mock mlx_whisper and set up transcribe response without segments
+        mock_mlx_whisper = Mock()
+        mock_result = {"text": "Hello world this is a test", "language": "en"}
+        mock_mlx_whisper.transcribe.return_value = mock_result
+
+        service = MlxWhisperService(model_name="mlx-community/whisper-large-v3-turbo")
+
+        # Mock sys.modules to provide our mock when imported
+        with patch.dict("sys.modules", {"mlx_whisper": mock_mlx_whisper}):
+            result = service.transcribe(audio_file)
+
+        assert isinstance(result, TranscriptResult)
+        assert result.language == "en"
+        assert len(result.segments) == 1
+        assert result.segments[0].text == "Hello world this is a test"
+        assert result.segments[0].start == 0.0
+        assert result.segments[0].end == 0.0  # unknown duration
+
+    def test_transcribe_file_not_found(self, temp_dir):
+        """test transcription with non-existent file"""
+        service = MlxWhisperService()
+        nonexistent_file = temp_dir / "nonexistent.wav"
+
+        with pytest.raises(FileNotFoundError) as exc:
+            service.transcribe(nonexistent_file)
+
+        assert "audio file not found" in str(exc.value)
+
+    def test_transcribe_with_fallback(self, audio_file, mock_console):
+        """test fallback to faster-whisper on mlx-whisper failure"""
+        # Create mock mlx_whisper that will fail
+        mock_mlx_whisper = Mock()
+        mock_mlx_whisper.transcribe.side_effect = Exception("MLX failed")
+
+        # mock faster-whisper fallback
+        mock_faster_service = Mock()
+        mock_transcript_result = TranscriptResult(
+            audio_path=str(audio_file),
+            sample_rate=48000,
+            language="en",
+            segments=[TranscriptSegment(0, 0.0, 1.0, "Fallback text")],
+            duration=1.0,
+            stt={"engine": "faster-whisper"},
+        )
+        mock_faster_service.transcribe.return_value = mock_transcript_result
+
+        with patch(
+            "meetcap.services.transcription.FasterWhisperService", return_value=mock_faster_service
+        ):
+            service = MlxWhisperService(model_name="mlx-community/whisper-large-v3-turbo")
+
+            # Mock sys.modules to provide our mock when imported
+            with patch.dict("sys.modules", {"mlx_whisper": mock_mlx_whisper}):
+                result = service.transcribe(audio_file)
+
+            assert result.stt["engine"] == "faster-whisper"
+            assert result.segments[0].text == "Fallback text"
+            mock_faster_service.transcribe.assert_called_once_with(audio_file)

@@ -22,14 +22,17 @@ from meetcap.core.devices import (
 from meetcap.core.hotkeys import HotkeyManager, PermissionChecker
 from meetcap.core.recorder import AudioRecorder
 from meetcap.services.model_download import (
+    ensure_mlx_whisper_model,
     ensure_qwen_model,
     ensure_whisper_model,
+    verify_mlx_whisper_model,
     verify_qwen_model,
     verify_whisper_model,
 )
 from meetcap.services.summarization import SummarizationService, save_summary
 from meetcap.services.transcription import (
     FasterWhisperService,
+    MlxWhisperService,
     WhisperCppService,
     save_transcript,
 )
@@ -56,6 +59,7 @@ class RecordingOrchestrator:
         self.interrupt_count = 0
         self.last_interrupt_time = 0
         self.processing_complete = False
+        self.graceful_stop_requested = False
 
     def run(
         self,
@@ -63,7 +67,7 @@ class RecordingOrchestrator:
         output_dir: str | None = None,
         sample_rate: int | None = None,
         channels: int | None = None,
-        stt_engine: str = "fwhisper",
+        stt_engine: str | None = None,
         llm_path: str | None = None,
         seed: int | None = None,
     ) -> None:
@@ -168,10 +172,34 @@ class RecordingOrchestrator:
             self.processing_complete = True
 
         except KeyboardInterrupt:
-            # this should not normally be reached due to signal handler
-            console.print("\n[yellow]operation cancelled[/yellow]")
-            if self.recorder and self.recorder.is_recording():
-                self.recorder.stop_recording()
+            # handle KeyboardInterrupt based on current state
+            if self.graceful_stop_requested:
+                # this is a second Ctrl-C after we already handled a graceful stop
+                console.print("\n[red]force exit requested[/red]")
+                if self.recorder and self.recorder.is_recording():
+                    self.recorder.stop_recording()
+                return
+            elif self.recorder and self.recorder.is_recording():
+                # if still recording, this means it's the first Ctrl-C during recording
+                console.print("\n[yellow]⏹[/yellow] stopping recording...")
+                final_path = self.recorder.stop_recording()
+                if final_path:
+                    # continue with processing
+                    self.processing_complete = False
+                    self._process_recording(
+                        audio_path=final_path,
+                        stt_engine=stt_engine,
+                        llm_path=llm_path,
+                        seed=seed,
+                    )
+                    self.processing_complete = True
+                else:
+                    console.print(
+                        "\n[yellow]operation cancelled - no recording to process[/yellow]"
+                    )
+            else:
+                # if not recording, this is during processing or already stopped
+                console.print("\n[yellow]operation cancelled[/yellow]")
         except Exception as e:
             ErrorHandler.handle_runtime_error(e)
         finally:
@@ -205,10 +233,15 @@ class RecordingOrchestrator:
                     "\n[yellow]⏹[/yellow] stopping recording (press Ctrl-C again to force exit)"
                 )
                 self._stop_recording()
+                self.graceful_stop_requested = True
+                # don't let KeyboardInterrupt propagate - we want to continue to processing
+                return
             elif not self.processing_complete:
                 console.print(
                     "\n[yellow]processing in progress (press Ctrl-C again to force exit)[/yellow]"
                 )
+                # don't exit during processing, let it continue
+                return
             else:
                 # if not recording and processing is done, exit
                 sys.exit(0)
@@ -228,17 +261,26 @@ class RecordingOrchestrator:
             .upper()
         )
 
-        while not self.stop_event.is_set():
-            elapsed = time.time() - start_time
-            minutes = int(elapsed // 60)
-            seconds = int(elapsed % 60)
+        try:
+            while not self.stop_event.is_set():
+                elapsed = time.time() - start_time
+                minutes = int(elapsed // 60)
+                seconds = int(elapsed % 60)
 
-            console.print(
-                f"[cyan]recording[/cyan] {minutes:02d}:{seconds:02d} "
-                f"[dim]({hotkey_str} or ⌃C to stop)[/dim]",
-                end="\r",
-            )
-            time.sleep(0.5)
+                console.print(
+                    f"[cyan]recording[/cyan] {minutes:02d}:{seconds:02d} "
+                    f"[dim]({hotkey_str} or ⌃C to stop)[/dim]",
+                    end="\r",
+                )
+
+                # use stop_event.wait() instead of time.sleep() to be more responsive
+                if self.stop_event.wait(timeout=0.5):
+                    break
+
+        except KeyboardInterrupt:
+            # KeyboardInterrupt during progress display - this is expected
+            # the signal handler should have set the stop event
+            pass
 
         console.print()  # new line after progress
 
@@ -263,12 +305,33 @@ class RecordingOrchestrator:
         # transcription
         console.print("\n[bold]📝 transcription[/bold]")
 
+        # use configured engine if not specified
+        if not stt_engine:
+            stt_engine = self.config.get("models", "stt_engine", "faster-whisper")
+            # map config names to CLI names
+            if stt_engine == "faster-whisper":
+                stt_engine = "fwhisper"
+            elif stt_engine == "mlx-whisper":
+                stt_engine = "mlx"
+
         if stt_engine == "fwhisper":
             stt_model_name = self.config.get("models", "stt_model_name", "large-v3")
             stt_model_path = self.config.expand_path(self.config.get("models", "stt_model_path"))
             stt_service = FasterWhisperService(
                 model_path=str(stt_model_path),
                 model_name=stt_model_name,
+                auto_download=True,
+            )
+        elif stt_engine == "mlx":
+            mlx_model_name = self.config.get(
+                "models", "mlx_stt_model_name", "mlx-community/whisper-large-v3-turbo"
+            )
+            mlx_model_path = self.config.expand_path(
+                self.config.get("models", "mlx_stt_model_path")
+            )
+            stt_service = MlxWhisperService(
+                model_name=mlx_model_name,
+                model_path=str(mlx_model_path) if mlx_model_path.exists() else None,
                 auto_download=True,
             )
         else:
@@ -370,10 +433,10 @@ def record(
         "-c",
         help="number of channels",
     ),
-    stt: str = typer.Option(
-        "fwhisper",
+    stt: str | None = typer.Option(
+        None,
         "--stt",
-        help="stt engine: fwhisper or whispercpp",
+        help="stt engine: fwhisper, mlx, or whispercpp (defaults to config)",
     ),
     llm: str | None = typer.Option(
         None,
@@ -401,15 +464,20 @@ def record(
 
     # run orchestrator
     orchestrator = RecordingOrchestrator(config)
-    orchestrator.run(
-        device=device,
-        output_dir=out,
-        sample_rate=rate,
-        channels=channels,
-        stt_engine=stt,
-        llm_path=llm,
-        seed=seed,
-    )
+    try:
+        orchestrator.run(
+            device=device,
+            output_dir=out,
+            sample_rate=rate,
+            channels=channels,
+            stt_engine=stt,
+            llm_path=llm,
+            seed=seed,
+        )
+    except KeyboardInterrupt:
+        # suppress Typer's "Aborted!" message for KeyboardInterrupt
+        # the orchestrator's signal handler already managed the graceful stop
+        sys.exit(0)
 
 
 @app.command()
@@ -418,10 +486,10 @@ def summarize(
         ...,
         help="path to audio file (m4a, wav, mp3, etc.)",
     ),
-    stt: str = typer.Option(
-        "fwhisper",
+    stt: str | None = typer.Option(
+        None,
         "--stt",
-        help="stt engine: fwhisper or whispercpp",
+        help="stt engine: fwhisper, mlx, or whispercpp (defaults to config)",
     ),
     llm: str | None = typer.Option(
         None,
@@ -635,53 +703,156 @@ def setup() -> None:
     # step 4: select and download whisper model
     console.print("\n[bold]step 4: select whisper (speech-to-text) model[/bold]")
 
-    whisper_models = [
-        {"name": "large-v3", "desc": "Most accurate, slower (default)", "size": "~1.5GB"},
-        {
-            "name": "large-v3-turbo",
-            "desc": "Faster than v3, slightly less accurate",
-            "size": "~1.5GB",
-        },
-        {"name": "small", "desc": "Fast, good for quick transcripts", "size": "~466MB"},
-    ]
+    # check if running on apple silicon
+    import platform
 
-    console.print("\n[cyan]available whisper models:[/cyan]")
-    for i, model in enumerate(whisper_models, 1):
-        console.print(f"  {i}. [bold]{model['name']}[/bold] - {model['desc']} ({model['size']})")
+    is_apple_silicon = platform.processor() == "arm"
 
-    choice = typer.prompt("\nselect model (1-3)", default="1")
-    try:
-        model_idx = int(choice) - 1
-        if 0 <= model_idx < len(whisper_models):
-            stt_model_name = whisper_models[model_idx]["name"]
-        else:
-            stt_model_name = "large-v3"
-    except ValueError:
-        stt_model_name = "large-v3"
+    if is_apple_silicon:
+        console.print(
+            "[cyan]detected Apple Silicon - mlx-whisper available for better performance[/cyan]"
+        )
+        stt_engines = [
+            {
+                "key": "mlx",
+                "name": "MLX Whisper (recommended for Apple Silicon)",
+                "default_model": "mlx-community/whisper-large-v3-turbo",
+            },
+            {"key": "faster", "name": "Faster Whisper (compatible)", "default_model": "large-v3"},
+        ]
 
-    console.print(f"\n[cyan]selected: {stt_model_name}[/cyan]")
+        console.print("\n[cyan]available stt engines:[/cyan]")
+        for i, engine in enumerate(stt_engines, 1):
+            console.print(f"  {i}. [bold]{engine['name']}[/bold]")
 
-    # download if needed
-    if verify_whisper_model(stt_model_name, models_dir):
-        console.print(f"[green]✓[/green] whisper {stt_model_name} already installed")
+        engine_choice = typer.prompt("\nselect engine (1-2)", default="1")
+        try:
+            engine_idx = int(engine_choice) - 1
+            if 0 <= engine_idx < len(stt_engines):
+                selected_engine = stt_engines[engine_idx]
+            else:
+                selected_engine = stt_engines[0]
+        except ValueError:
+            selected_engine = stt_engines[0]
     else:
-        console.print(f"[cyan]downloading whisper {stt_model_name}...[/cyan]")
-        console.print("[dim]this may take several minutes[/dim]")
+        selected_engine = {"key": "faster", "name": "Faster Whisper", "default_model": "large-v3"}
 
-        model_path = ensure_whisper_model(stt_model_name, models_dir)
+    console.print(f"\n[cyan]selected engine: {selected_engine['name']}[/cyan]")
 
-        if model_path:
-            console.print("[green]✓[/green] whisper model downloaded")
-            # update config with selected model
-            config.config["models"]["stt_model_name"] = stt_model_name
-            config.config["models"]["stt_model_path"] = (
-                f"~/.meetcap/models/whisper-{stt_model_name}"
+    if selected_engine["key"] == "mlx":
+        # mlx-whisper models
+        mlx_models = [
+            {
+                "name": "mlx-community/whisper-large-v3-turbo",
+                "desc": "Fast and accurate (recommended)",
+                "size": "~1.5GB",
+            },
+            {
+                "name": "mlx-community/whisper-large-v3-mlx",
+                "desc": "Most accurate",
+                "size": "~1.5GB",
+            },
+            {
+                "name": "mlx-community/whisper-small-mlx",
+                "desc": "Smallest, fastest",
+                "size": "~466MB",
+            },
+        ]
+
+        console.print("\n[cyan]available mlx-whisper models:[/cyan]")
+        for i, model in enumerate(mlx_models, 1):
+            console.print(
+                f"  {i}. [bold]{model['name'].split('/')[-1]}[/bold] - {model['desc']} ({model['size']})"
             )
-            config.save()
+
+        choice = typer.prompt("\nselect model (1-3)", default="1")
+        try:
+            model_idx = int(choice) - 1
+            if 0 <= model_idx < len(mlx_models):
+                mlx_model_name = mlx_models[model_idx]["name"]
+            else:
+                mlx_model_name = mlx_models[0]["name"]
+        except ValueError:
+            mlx_model_name = mlx_models[0]["name"]
+
+        console.print(f"\n[cyan]selected: {mlx_model_name.split('/')[-1]}[/cyan]")
+
+        # verify/download if needed
+        if verify_mlx_whisper_model(mlx_model_name, models_dir):
+            console.print(
+                f"[green]✓[/green] mlx-whisper {mlx_model_name.split('/')[-1]} already installed"
+            )
         else:
-            console.print("[red]✗[/red] whisper download failed")
-            console.print("[yellow]check your internet connection and try again[/yellow]")
-            return
+            console.print(
+                f"[cyan]downloading mlx-whisper {mlx_model_name.split('/')[-1]}...[/cyan]"
+            )
+            console.print("[dim]this may take several minutes[/dim]")
+
+            model_path = ensure_mlx_whisper_model(mlx_model_name, models_dir)
+
+            if model_path:
+                console.print("[green]✓[/green] mlx-whisper model ready")
+            else:
+                console.print("[red]✗[/red] mlx-whisper download failed")
+                console.print("[yellow]check your internet connection and try again[/yellow]")
+                return
+
+        # update config
+        config.config["models"]["stt_engine"] = "mlx-whisper"
+        config.config["models"]["mlx_stt_model_name"] = mlx_model_name
+        config.save()
+
+    else:
+        # faster-whisper models
+        whisper_models = [
+            {"name": "large-v3", "desc": "Most accurate, slower (default)", "size": "~1.5GB"},
+            {
+                "name": "large-v3-turbo",
+                "desc": "Faster than v3, slightly less accurate",
+                "size": "~1.5GB",
+            },
+            {"name": "small", "desc": "Fast, good for quick transcripts", "size": "~466MB"},
+        ]
+
+        console.print("\n[cyan]available whisper models:[/cyan]")
+        for i, model in enumerate(whisper_models, 1):
+            console.print(
+                f"  {i}. [bold]{model['name']}[/bold] - {model['desc']} ({model['size']})"
+            )
+
+        choice = typer.prompt("\nselect model (1-3)", default="1")
+        try:
+            model_idx = int(choice) - 1
+            if 0 <= model_idx < len(whisper_models):
+                stt_model_name = whisper_models[model_idx]["name"]
+            else:
+                stt_model_name = "large-v3"
+        except ValueError:
+            stt_model_name = "large-v3"
+
+        console.print(f"\n[cyan]selected: {stt_model_name}[/cyan]")
+
+        # download if needed
+        if verify_whisper_model(stt_model_name, models_dir):
+            console.print(f"[green]✓[/green] whisper {stt_model_name} already installed")
+        else:
+            console.print(f"[cyan]downloading whisper {stt_model_name}...[/cyan]")
+            console.print("[dim]this may take several minutes[/dim]")
+
+            model_path = ensure_whisper_model(stt_model_name, models_dir)
+
+            if model_path:
+                console.print("[green]✓[/green] whisper model downloaded")
+            else:
+                console.print("[red]✗[/red] whisper download failed")
+                console.print("[yellow]check your internet connection and try again[/yellow]")
+                return
+
+        # update config
+        config.config["models"]["stt_engine"] = "faster-whisper"
+        config.config["models"]["stt_model_name"] = stt_model_name
+        config.config["models"]["stt_model_path"] = f"~/.meetcap/models/whisper-{stt_model_name}"
+        config.save()
 
     # step 5: select and download llm model
     console.print("\n[bold]step 5: select llm (summarization) model[/bold]")
@@ -822,14 +993,29 @@ def verify() -> None:
     else:
         checks.append(("microphone", "⚠️ permission unknown", "yellow"))
 
-    # check whisper model (no download)
+    # check stt models (no download)
     stt_model_name = config.get("models", "stt_model_name", "large-v3")
+    mlx_model_name = config.get(
+        "models", "mlx_stt_model_name", "mlx-community/whisper-large-v3-turbo"
+    )
     models_dir = config.expand_path(config.get("paths", "models_dir", "~/.meetcap/models"))
 
+    # check faster-whisper
     if verify_whisper_model(stt_model_name, models_dir):
-        checks.append(("stt model", f"✅ {stt_model_name} ready", "green"))
+        checks.append(("faster-whisper", f"✅ {stt_model_name} ready", "green"))
     else:
-        checks.append(("stt model", f"❌ {stt_model_name} not found", "red"))
+        checks.append(("faster-whisper", f"❌ {stt_model_name} not found", "red"))
+
+    # check mlx-whisper (only on Apple Silicon)
+    import platform
+
+    if platform.processor() == "arm":
+        if verify_mlx_whisper_model(mlx_model_name, models_dir):
+            checks.append(("mlx-whisper", f"✅ {mlx_model_name.split('/')[-1]} ready", "green"))
+        else:
+            checks.append(("mlx-whisper", f"❌ {mlx_model_name.split('/')[-1]} not found", "red"))
+    else:
+        checks.append(("mlx-whisper", "⚠️ requires Apple Silicon", "yellow"))
 
     # check qwen llm model (no download)
     if verify_qwen_model(models_dir):

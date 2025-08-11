@@ -2,6 +2,7 @@
 
 import signal
 import threading
+from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -420,7 +421,19 @@ class TestCLICommands:
 
         with patch("meetcap.cli.Config") as mock_config_class:
             mock_config = Mock()
-            mock_config.get.return_value = str(temp_dir / "model.gguf")
+
+            # Mock config to return specific values for different keys
+            def mock_get(section, key, default=None):
+                if section == "models" and key == "stt_engine":
+                    return "faster-whisper"  # Force use of faster-whisper for test
+                elif section == "models" and key == "stt_model_name":
+                    return "large-v3"
+                elif section == "models" and key == "stt_model_path":
+                    return "~/.meetcap/models/whisper-large-v3"
+                else:
+                    return str(temp_dir / "model.gguf")
+
+            mock_config.get.side_effect = mock_get
             mock_config.expand_path.return_value = temp_dir / "model.gguf"
             mock_config_class.return_value = mock_config
 
@@ -455,90 +468,68 @@ class TestCLICommands:
                             # Summarization may depend on model availability
 
     def test_setup_command(self, runner):
-        """test setup command"""
+        """test setup command with comprehensive mocking to avoid real system calls"""
+        # Mock all external dependencies at once to speed up test
         with patch("meetcap.cli.Config") as mock_config_class:
             mock_config = Mock()
-            # configure mock to return proper values for path operations
             mock_config.get.return_value = "~/.meetcap/models"
             mock_config.expand_path.return_value = Path("/mock/models")
-            # make config accessible as dictionary
-            mock_config.config = {
-                "models": {
-                    "stt_model_path": "/models/whisper",
-                    "llm_gguf_path": "/models/qwen.gguf",
-                },
-                "paths": {"models_dir": "~/.meetcap/models"},
-            }
+            mock_config.config = {"models": {}, "paths": {"models_dir": "~/.meetcap/models"}}
             mock_config_class.return_value = mock_config
 
-            with patch("typer.prompt") as mock_prompt:
-                with patch("typer.confirm", return_value=True):
-                    # simulate user selections
-                    mock_prompt.side_effect = [
-                        "large-v3",  # whisper model
-                        "qwen3-4b-thinking",  # llm model
-                        "",  # default audio device
-                    ]
+            # Mock all system calls and external dependencies comprehensively
+            patches = [
+                patch("subprocess.run", return_value=Mock(returncode=0)),
+                patch("platform.processor", return_value="arm"),
+                patch("typer.prompt", side_effect=["1", "1", "1"]),  # User choices
+                patch("typer.confirm", return_value=True),
+                patch("time.sleep"),  # Mock time.sleep
+                patch("threading.Event.wait", return_value=False),  # Mock hotkey timeout
+                # Mock all file operations
+                patch("pathlib.Path.exists", return_value=False),
+                patch("pathlib.Path.unlink"),
+                patch("pathlib.Path.mkdir"),
+                patch("pathlib.Path.expanduser", return_value=Path("/mock/models")),
+                # Mock all import checks to avoid real module loading
+                patch("importlib.util.find_spec", return_value=Mock()),
+                # Mock all model verification/download functions
+                patch("meetcap.cli.verify_whisper_model", return_value=False),
+                patch("meetcap.cli.verify_qwen_model", return_value=False),
+                patch("meetcap.cli.verify_mlx_whisper_model", return_value=False),
+                patch("meetcap.cli.ensure_whisper_model", return_value="/models/whisper"),
+                patch("meetcap.cli.ensure_qwen_model", return_value="/models/qwen.gguf"),
+                patch("meetcap.cli.ensure_mlx_whisper_model", return_value="/models/mlx-whisper"),
+                # Mock hardware interactions
+                patch("meetcap.cli.list_audio_devices", return_value=[AudioDevice(0, "Mic")]),
+                patch(
+                    "meetcap.cli.AudioRecorder",
+                    return_value=Mock(
+                        start_recording=Mock(return_value=Path("/tmp/test.wav")),
+                        stop_recording=Mock(return_value=None),
+                    ),
+                ),
+                patch("meetcap.cli.HotkeyManager", return_value=Mock()),
+                # Mock permission checker
+                patch(
+                    "meetcap.cli.PermissionChecker",
+                    return_value=Mock(check_microphone_permission=Mock(return_value=True)),
+                ),
+            ]
 
-                    with patch("meetcap.cli.ensure_whisper_model") as mock_whisper:
-                        mock_whisper.return_value = "/models/whisper"
+            # Apply all patches and run test
+            with ExitStack() as stack:
+                for p in patches:
+                    stack.enter_context(p)
 
-                        with patch("meetcap.cli.ensure_qwen_model") as mock_qwen:
-                            mock_qwen.return_value = "/models/qwen.gguf"
+                result = runner.invoke(app, ["setup"])
 
-                            with patch("meetcap.cli.list_audio_devices") as mock_devices:
-                                mock_devices.return_value = [AudioDevice(0, "Mic")]
+                if result.exit_code != 0:
+                    print("STDOUT:", result.stdout)
+                    if result.exception:
+                        print("EXCEPTION:", result.exception)
 
-                                with patch("meetcap.cli.AudioRecorder") as mock_recorder_class:
-                                    mock_recorder = Mock()
-                                    mock_recorder.start_recording.return_value = Path(
-                                        "/tmp/test.wav"
-                                    )
-                                    mock_recorder.stop_recording.return_value = None
-                                    mock_recorder_class.return_value = mock_recorder
-
-                                    with patch("meetcap.cli.HotkeyManager") as mock_hotkey_class:
-                                        mock_hotkey = Mock()
-                                        mock_hotkey_class.return_value = mock_hotkey
-
-                                        with patch("time.sleep"):
-                                            with patch("pathlib.Path.exists", return_value=False):
-                                                with patch("pathlib.Path.unlink"):
-                                                    with patch(
-                                                        "meetcap.cli.verify_whisper_model",
-                                                        return_value=False,
-                                                    ):
-                                                        with patch(
-                                                            "meetcap.cli.verify_qwen_model",
-                                                            return_value=False,
-                                                        ):
-                                                            with patch(
-                                                                "subprocess.run"
-                                                            ) as mock_subprocess:
-                                                                mock_subprocess.return_value = Mock(
-                                                                    returncode=0
-                                                                )
-
-                                                                result = runner.invoke(
-                                                                    app, ["setup"]
-                                                                )
-
-                                                                if result.exit_code != 0:
-                                                                    print("STDOUT:", result.stdout)
-                                                                    if hasattr(result, "stderr"):
-                                                                        print(
-                                                                            "STDERR:", result.stderr
-                                                                        )
-                                                                    if result.exception:
-                                                                        print(
-                                                                            "EXCEPTION:",
-                                                                            result.exception,
-                                                                        )
-
-                                                                assert result.exit_code == 0
-                                                                # Ensure functions may not be called if models already exist
-                                                                # Just verify the setup completed successfully
-                                                                mock_config.save.assert_called()
+                assert result.exit_code == 0
+                mock_config.save.assert_called()
 
 
 class TestCLIIntegration:

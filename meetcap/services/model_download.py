@@ -263,6 +263,188 @@ def ensure_qwen_model(
     return download_gguf_model(model_info["url"], model_info["name"], models_dir, force_download)
 
 
+def ensure_mlx_whisper_model(
+    model_name: str = "mlx-community/whisper-large-v3-turbo",
+    models_dir: Path | None = None,
+    force_download: bool = False,
+) -> Path:
+    """
+    ensure mlx-whisper model is available, downloading if necessary.
+
+    args:
+        model_name: hugging face model name (e.g., 'mlx-community/whisper-large-v3-turbo')
+        models_dir: directory to store models (default: ~/.meetcap/models/mlx-whisper)
+        force_download: force re-download even if exists
+
+    returns:
+        path to model directory
+    """
+    if models_dir is None:
+        models_dir = Path.home() / ".meetcap" / "models" / "mlx-whisper"
+
+    models_dir = models_dir.expanduser()
+    models_dir.mkdir(parents=True, exist_ok=True)
+
+    # create model directory name from HF repo
+    model_dir_name = model_name.replace("/", "--")
+    model_path = models_dir / model_dir_name
+
+    if model_path.exists() and not force_download:
+        console.print(f"[green]✓[/green] mlx-whisper model already exists: {model_path}")
+        return model_path
+
+    # download model using mlx-whisper
+    try:
+        import mlx_whisper
+    except ImportError:
+        console.print(
+            "[red]error:[/red] mlx-whisper not installed\n"
+            "[yellow]install with:[/yellow] pip install mlx-whisper"
+        )
+        return None
+
+    console.print(f"[cyan]downloading mlx-whisper model '{model_name}'...[/cyan]")
+    console.print("[dim]this may take several minutes on first run[/dim]")
+
+    try:
+        # use mlx-whisper's download functionality
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            DownloadColumn(),
+            TimeRemainingColumn(),
+            console=console,
+            transient=True,
+        ) as progress:
+            task = progress.add_task(f"downloading {model_name}...", total=None)
+
+            # create a small test file to trigger model download
+            import math
+            import tempfile
+            import wave
+
+            # create a 1-second test audio file
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                sample_rate = 16000
+                duration = 1.0
+                frames = int(sample_rate * duration)
+
+                # generate simple sine wave without numpy
+                audio_data = []
+                for i in range(frames):
+                    t = i / sample_rate
+                    sample = math.sin(440 * 2 * math.pi * t) * 0.1
+                    audio_int16 = int(sample * 32767)
+                    # clamp to int16 range
+                    audio_int16 = max(-32768, min(32767, audio_int16))
+                    audio_data.append(audio_int16)
+
+                # write wav file
+                with wave.open(tmp.name, "w") as wav_file:
+                    wav_file.setnchannels(1)
+                    wav_file.setsampwidth(2)
+                    wav_file.setframerate(sample_rate)
+                    # convert to bytes
+                    import struct
+
+                    audio_bytes = struct.pack("<" + "h" * len(audio_data), *audio_data)
+                    wav_file.writeframes(audio_bytes)
+
+                # trigger model download by transcribing test audio
+                mlx_whisper.transcribe(tmp.name, path_or_hf_repo=model_name)
+
+            progress.update(task, completed=True)
+
+        console.print(f"[green]✓[/green] mlx-whisper model downloaded: {model_name}")
+        return model_path
+
+    except Exception as e:
+        console.print(f"[red]error downloading mlx-whisper model:[/red] {e}")
+        return None
+
+
+def verify_mlx_whisper_model(
+    model_name: str = "mlx-community/whisper-large-v3-turbo",
+    models_dir: Path | None = None,
+) -> bool:
+    """
+    verify mlx-whisper model is available for use.
+
+    args:
+        model_name: hugging face model name
+        models_dir: directory where models are stored
+
+    returns:
+        true if model is available
+    """
+    if models_dir is None:
+        models_dir = Path.home() / ".meetcap" / "models" / "mlx-whisper"
+
+    models_dir = models_dir.expanduser()
+
+    # check if mlx-whisper is installed
+    import importlib.util
+
+    if importlib.util.find_spec("mlx_whisper") is None:
+        console.print("[yellow]⚠[/yellow] mlx-whisper not installed")
+        return False
+
+    # check if running on apple silicon
+    import platform
+
+    if platform.processor() != "arm":
+        console.print("[yellow]⚠[/yellow] mlx-whisper requires Apple Silicon (M1/M2/M3)")
+        return False
+
+    # try to load model to verify it works
+    try:
+        import mlx_whisper
+
+        console.print(f"[cyan]verifying mlx-whisper model '{model_name}'...[/cyan]")
+
+        # try loading model by creating a minimal test transcription
+        import math
+        import tempfile
+        import wave
+
+        # create a minimal test audio file
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            sample_rate = 16000
+            duration = 0.1  # very short for verification
+            frames = int(sample_rate * duration)
+
+            # generate simple sine wave without numpy
+            audio_data = []
+            for i in range(frames):
+                t = i / sample_rate
+                sample = math.sin(440 * 2 * math.pi * t) * 0.1
+                audio_int16 = int(sample * 32767)
+                # clamp to int16 range
+                audio_int16 = max(-32768, min(32767, audio_int16))
+                audio_data.append(audio_int16)
+
+            # write wav file
+            with wave.open(tmp.name, "w") as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(sample_rate)
+                # convert to bytes
+                import struct
+
+                audio_bytes = struct.pack("<" + "h" * len(audio_data), *audio_data)
+                wav_file.writeframes(audio_bytes)
+
+            # try to transcribe with the model
+            mlx_whisper.transcribe(tmp.name, path_or_hf_repo=model_name)
+
+        console.print(f"[green]✓[/green] mlx-whisper model '{model_name}' is ready")
+        return True
+
+    except Exception as e:
+        console.print(f"[red]✗[/red] mlx-whisper model verification failed: {e}")
+        return False
+
+
 def verify_qwen_model(
     models_dir: Path | None = None,
 ) -> bool:

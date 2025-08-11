@@ -57,6 +57,9 @@ dev = [
 stt = [
     "faster-whisper>=0.10.0",
 ]
+mlx-stt = [
+    "mlx-whisper>=0.1.0",
+]
 llm = [
     "llama-cpp-python>=0.2.32",
 ]
