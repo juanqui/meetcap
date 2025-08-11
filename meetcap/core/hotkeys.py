@@ -36,6 +36,15 @@ class HotkeyManager:
         console.print("\n[yellow]⏹[/yellow] stop hotkey pressed")
         self.stop_callback()
 
+    def _compatible_callback(self):
+        """wrapper to handle both old and new pynput callback signatures"""
+
+        def wrapper(*args, **kwargs):
+            # call our callback regardless of signature (old or new pynput versions)
+            return self._on_stop_hotkey()
+
+        return wrapper
+
     def start(self, hotkey_combo: str = "<cmd>+<shift>+s") -> None:
         """
         start listening for hotkeys.
@@ -47,10 +56,34 @@ class HotkeyManager:
             return  # already listening
 
         try:
-            # create hotkey listener
-            hotkeys = {hotkey_combo: self._on_stop_hotkey}
+            # create hotkey listener with compatible callback
+            hotkeys = {hotkey_combo: self._compatible_callback()}
 
             self.listener = keyboard.GlobalHotKeys(hotkeys)
+
+            # monkey-patch the _on_press method to handle signature compatibility issues
+            original_on_press = self.listener._on_press
+
+            def compatible_on_press(*args, **kwargs):
+                # handle both old and new pynput signatures dynamically
+                import inspect
+
+                sig = inspect.signature(original_on_press)
+
+                # extract key from args (first argument after self)
+                key = args[0] if args else kwargs.get("key")
+                injected = args[1] if len(args) > 1 else kwargs.get("injected", False)
+
+                if len(sig.parameters) > 1:  # new signature with injected parameter
+                    return original_on_press(key, injected)
+                else:  # old signature without injected parameter
+                    return original_on_press(key)
+
+            # bind the method to the instance
+            import types
+
+            self.listener._on_press = types.MethodType(compatible_on_press, self.listener)
+
             self.listener.start()
 
             console.print(

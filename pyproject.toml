@@ -30,12 +30,13 @@ classifiers = [
 ]
 
 dependencies = [
-    "pynput>=1.7.6",
-    "rich>=13.7.0",
-    "typer>=0.9.0",
-    "tomli>=2.0.1; python_version < '3.11'",
+    "pynput>=1.8.1",
+    "rich>=14.1.0",
+    "typer>=0.16.0",
+    "tomli>=2.2.1; python_version < '3.11'",
     "toml>=0.10.2",
-    "urllib3>=2.0.0",
+    "urllib3>=2.5.0",
+    "llama-cpp-python>=0.3.15",
 ]
 
 [project.scripts]
@@ -43,39 +44,36 @@ meetcap = "meetcap.cli:app"
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.4.3",
-    "pytest-cov>=4.1.0",
-    "pytest-mock>=3.12.0",
-    "pytest-asyncio>=0.21.1",
-    "pytest-timeout>=2.2.0",
-    "black>=23.12.0",
-    "ruff>=0.1.8",
-    "mypy>=1.7.1",
-    "coverage[toml]>=7.3.2",
-    "bump2version>=1.0.0",
+    "pytest>=8.4.1",
+    "pytest-cov>=6.2.1",
+    "pytest-mock>=3.14.0",
+    "pytest-asyncio>=0.25.0",
+    "pytest-timeout>=2.4.0",
+    "black>=25.1.0",
+    "ruff>=0.12.8",
+    "mypy>=1.13.0",
+    "coverage[toml]>=7.6.9",
+    "bump2version>=1.0.1",
 ]
 stt = [
-    "faster-whisper>=0.10.0",
+    "faster-whisper>=1.2.0",
 ]
 mlx-stt = [
-    "mlx-whisper>=0.1.0",
-]
-llm = [
-    "llama-cpp-python>=0.2.32",
+    "mlx-whisper>=0.4.2",
 ]
 
 [tool.hatch.envs.default]
 dependencies = [
-    "pytest>=7.4.3",
-    "pytest-cov>=4.1.0",
-    "pytest-mock>=3.12.0",
-    "pytest-asyncio>=0.21.1",
-    "pytest-timeout>=2.2.0",
-    "black>=23.12.0",
-    "ruff>=0.1.8",
-    "mypy>=1.7.1",
-    "coverage[toml]>=7.3.2",
-    "bump2version>=1.0.0",
+    "pytest>=8.4.1",
+    "pytest-cov>=6.2.1",
+    "pytest-mock>=3.14.0",
+    "pytest-asyncio>=0.25.0",
+    "pytest-timeout>=2.4.0",
+    "black>=25.1.0",
+    "ruff>=0.12.8",
+    "mypy>=1.13.0",
+    "coverage[toml]>=7.6.9",
+    "bump2version>=1.0.1",
 ]
 
 [tool.hatch.envs.default.scripts]

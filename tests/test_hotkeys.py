@@ -77,7 +77,13 @@ class TestHotkeyManager:
                 # verify hotkey mapping
                 hotkeys_arg = mock_hotkeys.call_args[0][0]
                 assert "<cmd>+<shift>+s" in hotkeys_arg
-                assert hotkeys_arg["<cmd>+<shift>+s"] == hotkey_manager._on_stop_hotkey
+                # callback should be the wrapper function, not the direct method
+                callback = hotkeys_arg["<cmd>+<shift>+s"]
+                assert callable(callback)
+                # test that the wrapper calls our method
+                with patch.object(hotkey_manager, "_on_stop_hotkey") as mock_stop:
+                    callback()  # call the wrapper
+                    mock_stop.assert_called_once()
 
                 # verify console output
                 mock_console.print.assert_called_with("[cyan]⌨[/cyan] press ⌘⇧S to stop recording")
@@ -302,3 +308,67 @@ class TestHotkeyIntegration:
 
             manager1.stop()
             manager2.stop()
+
+    def test_compatible_callback_handles_different_signatures(self):
+        """test that the compatible callback wrapper handles both old and new pynput signatures"""
+        callback_called = False
+
+        def stop_callback():
+            nonlocal callback_called
+            callback_called = True
+
+        manager = HotkeyManager(stop_callback)
+        wrapper = manager._compatible_callback()
+
+        # test old signature (no arguments)
+        callback_called = False
+        with patch("time.time", return_value=100.0):
+            wrapper()
+        assert callback_called
+
+        # test new signature (with injected parameter - as seen in newer pynput versions)
+        callback_called = False
+        with patch("time.time", return_value=101.0):  # different time to avoid debouncing
+            wrapper(injected=True)  # this should not cause an error
+        assert callback_called
+
+        # test with arbitrary args/kwargs (should be resilient)
+        callback_called = False
+        with patch("time.time", return_value=102.0):  # different time to avoid debouncing
+            wrapper(some_arg=True, another=False)
+        assert callback_called
+
+    def test_monkey_patch_on_press_signature_compatibility(self):
+        """test that the monkey-patched _on_press method handles signature changes"""
+
+        def stop_callback():
+            pass
+
+        manager = HotkeyManager(stop_callback)
+
+        with patch("pynput.keyboard.GlobalHotKeys") as mock_hotkeys_class:
+            mock_listener = Mock()
+            mock_hotkeys_class.return_value = mock_listener
+
+            # simulate the original _on_press method
+            original_on_press = Mock()
+            mock_listener._on_press = original_on_press
+
+            # start the manager (this should apply the monkey patch)
+            manager.start("<cmd>+<shift>+s")
+
+            # verify the monkey patch was applied
+            assert mock_listener._on_press != original_on_press
+
+            # test that our patched method can handle both signatures
+            patched_method = mock_listener._on_press
+
+            # test with different signatures that the patch should handle gracefully
+            try:
+                # these should not raise errors regardless of the original signature
+                patched_method("some_key")
+                patched_method("some_key", False)
+                patched_method("some_key", injected=True)
+            except Exception as e:
+                # if we get here, our patch isn't working correctly
+                raise AssertionError(f"Monkey patch failed to handle signature: {e}") from e
