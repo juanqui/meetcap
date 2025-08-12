@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 import pytest
 from typer.testing import CliRunner
 
-from meetcap.cli import RecordingOrchestrator, app
+from meetcap.cli import BackupManager, RecordingOrchestrator, app
 from meetcap.core.devices import AudioDevice
 from meetcap.utils.config import Config
 
@@ -574,6 +574,7 @@ class TestCLIIntegration:
         assert "devices" in result.output
         assert "record" in result.output
         assert "summarize" in result.output
+        assert "reprocess" in result.output
         assert "verify" in result.output
         assert "setup" in result.output
 
@@ -581,7 +582,7 @@ class TestCLIIntegration:
         """test individual command help"""
         runner = CliRunner()
 
-        commands = ["devices", "record", "summarize", "verify", "setup"]
+        commands = ["devices", "record", "summarize", "reprocess", "verify", "setup"]
 
         for cmd in commands:
             result = runner.invoke(app, [cmd, "--help"])
@@ -596,3 +597,265 @@ class TestCLIIntegration:
             # Note: typer doesn't have built-in version flag,
             # would need to add it to the app
             pass  # version is shown in record command banner
+
+
+class TestBackupManager:
+    """test backup manager functionality"""
+
+    def test_create_backup(self, temp_dir):
+        """test creating backup files"""
+        # create test file
+        test_file = temp_dir / "test.txt"
+        test_file.write_text("original content")
+
+        manager = BackupManager()
+        backup_path = manager.create_backup(test_file)
+
+        assert backup_path is not None
+        assert backup_path.exists()
+        assert backup_path.name == "test.txt.backup"
+        assert backup_path.read_text() == "original content"
+        assert backup_path in manager.backups
+
+    def test_create_backup_nonexistent_file(self, temp_dir):
+        """test creating backup for nonexistent file"""
+        test_file = temp_dir / "nonexistent.txt"
+
+        manager = BackupManager()
+        backup_path = manager.create_backup(test_file)
+
+        assert backup_path is None
+        assert len(manager.backups) == 0
+
+    def test_restore_backup(self, temp_dir):
+        """test restoring from backup"""
+        # create test file and backup
+        test_file = temp_dir / "test.txt"
+        test_file.write_text("original content")
+
+        manager = BackupManager()
+        backup_path = manager.create_backup(test_file)
+
+        # modify original file
+        test_file.write_text("modified content")
+
+        # restore from backup
+        success = manager.restore_backup(test_file)
+
+        assert success is True
+        assert test_file.read_text() == "original content"
+        assert not backup_path.exists()
+        assert backup_path not in manager.backups
+
+    def test_restore_backup_no_backup(self, temp_dir):
+        """test restoring when no backup exists"""
+        test_file = temp_dir / "test.txt"
+        test_file.write_text("content")
+
+        manager = BackupManager()
+        success = manager.restore_backup(test_file)
+
+        assert success is False
+        assert test_file.read_text() == "content"
+
+    def test_cleanup_backups(self, temp_dir):
+        """test cleaning up all backups"""
+        # create multiple backup files
+        for i in range(3):
+            backup_file = temp_dir / f"file{i}.txt.backup"
+            backup_file.write_text(f"backup {i}")
+
+        manager = BackupManager()
+        manager.backups = list(temp_dir.glob("*.backup"))
+
+        manager.cleanup_backups(temp_dir)
+
+        # all backups should be deleted
+        assert len(list(temp_dir.glob("*.backup"))) == 0
+        assert len(manager.backups) == 0
+
+    def test_restore_all(self, temp_dir):
+        """test restoring all tracked backups"""
+        # create multiple files and backups
+        files = []
+        for i in range(3):
+            test_file = temp_dir / f"file{i}.txt"
+            test_file.write_text(f"original {i}")
+            files.append(test_file)
+
+        manager = BackupManager()
+        for test_file in files:
+            manager.create_backup(test_file)
+            test_file.write_text("modified")
+
+        # restore all
+        manager.restore_all()
+
+        # all files should be restored
+        for i, test_file in enumerate(files):
+            assert test_file.read_text() == f"original {i}"
+
+
+class TestReprocessCommand:
+    """test reprocess command functionality"""
+
+    @pytest.fixture
+    def runner(self):
+        """create CLI runner"""
+        return CliRunner()
+
+    @pytest.fixture
+    def mock_recording_dir(self, temp_dir):
+        """create mock recording directory"""
+        recording_dir = temp_dir / "2025_Jan_15_TestMeeting"
+        recording_dir.mkdir()
+
+        # create mock files
+        (recording_dir / "recording.wav").write_bytes(b"RIFF" + b"\x00" * 1000)
+        (recording_dir / "recording.transcript.txt").write_text("test transcript")
+        (recording_dir / "recording.transcript.json").write_text('{"segments": []}')
+        (recording_dir / "recording.summary.md").write_text("# Test Summary")
+
+        return recording_dir
+
+    def test_reprocess_command_help(self, runner):
+        """test reprocess command help"""
+        result = runner.invoke(app, ["reprocess", "--help"])
+
+        assert result.exit_code == 0
+        assert "reprocess" in result.output.lower()
+        assert "recording" in result.output.lower()
+        assert "--mode" in result.output
+        assert "--stt" in result.output
+        assert "--llm" in result.output
+
+    def test_reprocess_invalid_mode(self, runner):
+        """test reprocess with invalid mode"""
+        with patch("meetcap.cli.Config"):
+            result = runner.invoke(app, ["reprocess", "test_dir", "--mode", "invalid"])
+
+            assert result.exit_code == 1
+            assert "invalid mode" in result.output.lower()
+
+    def test_reprocess_invalid_stt(self, runner):
+        """test reprocess with invalid stt engine"""
+        with patch("meetcap.cli.Config"):
+            result = runner.invoke(app, ["reprocess", "test_dir", "--stt", "invalid"])
+
+            assert result.exit_code == 1
+            assert "invalid stt engine" in result.output.lower()
+
+    def test_reprocess_directory_not_found(self, runner):
+        """test reprocess with nonexistent directory"""
+        with patch("meetcap.cli.Config") as mock_config_class:
+            mock_config = Mock()
+            mock_config.expand_path.return_value = Path("/nonexistent")
+            mock_config_class.return_value = mock_config
+
+            result = runner.invoke(app, ["reprocess", "nonexistent_dir", "--yes"])
+
+            assert result.exit_code == 1
+            assert "not found" in result.output.lower()
+
+    def test_reprocess_stt_mode(self, runner, mock_recording_dir):
+        """test reprocess in stt mode"""
+        with ExitStack() as stack:
+            mock_config_class = stack.enter_context(patch("meetcap.cli.Config"))
+            mock_config = Mock()
+            mock_config.expand_path.return_value = mock_recording_dir.parent
+            mock_config.get.return_value = str(mock_recording_dir.parent)
+            mock_config.get_section.return_value = {}
+            mock_config_class.return_value = mock_config
+
+            mock_process_audio = stack.enter_context(
+                patch("meetcap.cli.RecordingOrchestrator._process_audio_to_transcript")
+            )
+            mock_process_audio.return_value = (
+                mock_recording_dir / "recording.transcript.txt",
+                mock_recording_dir / "recording.transcript.json",
+            )
+
+            mock_process_summary = stack.enter_context(
+                patch("meetcap.cli.RecordingOrchestrator._process_transcript_to_summary")
+            )
+            mock_process_summary.return_value = mock_recording_dir / "recording.summary.md"
+
+            result = runner.invoke(
+                app,
+                ["reprocess", str(mock_recording_dir), "--mode", "stt", "--yes"],
+            )
+
+            assert result.exit_code == 0
+            assert "reprocessing complete" in result.output.lower()
+            mock_process_audio.assert_called_once()
+            mock_process_summary.assert_called_once()
+
+    def test_reprocess_summary_mode(self, runner, mock_recording_dir):
+        """test reprocess in summary mode"""
+        with ExitStack() as stack:
+            mock_config_class = stack.enter_context(patch("meetcap.cli.Config"))
+            mock_config = Mock()
+            mock_config.expand_path.return_value = mock_recording_dir.parent
+            mock_config.get.return_value = str(mock_recording_dir.parent)
+            mock_config.get_section.return_value = {}
+            mock_config_class.return_value = mock_config
+
+            mock_process_summary = stack.enter_context(
+                patch("meetcap.cli.RecordingOrchestrator._process_transcript_to_summary")
+            )
+            mock_process_summary.return_value = mock_recording_dir / "recording.summary.md"
+
+            result = runner.invoke(
+                app,
+                ["reprocess", str(mock_recording_dir), "--mode", "summary", "--yes"],
+            )
+
+            assert result.exit_code == 0
+            assert "reprocessing complete" in result.output.lower()
+            mock_process_summary.assert_called_once()
+
+    def test_reprocess_with_confirmation(self, runner, mock_recording_dir):
+        """test reprocess with confirmation prompt"""
+        with ExitStack() as stack:
+            mock_config_class = stack.enter_context(patch("meetcap.cli.Config"))
+            mock_config = Mock()
+            mock_config.expand_path.return_value = mock_recording_dir.parent
+            mock_config.get.return_value = str(mock_recording_dir.parent)
+            mock_config_class.return_value = mock_config
+
+            # simulate user saying no to confirmation
+            result = runner.invoke(
+                app,
+                ["reprocess", str(mock_recording_dir)],
+                input="n\n",
+            )
+
+            assert "cancelled" in result.output.lower()
+
+    def test_resolve_recording_path(self):
+        """test path resolution logic"""
+        with patch("meetcap.cli.Config") as mock_config_class:
+            mock_config = Mock()
+            output_dir = Path("/test/recordings")
+            mock_config.expand_path.return_value = output_dir
+            mock_config.get.return_value = str(output_dir)
+            mock_config_class.return_value = mock_config
+
+            orchestrator = RecordingOrchestrator(mock_config)
+
+            # test absolute path
+            with patch("pathlib.Path.exists", return_value=True):
+                result = orchestrator._resolve_recording_path("/absolute/path")
+                assert result == Path("/absolute/path")
+
+            # test relative path in current directory
+            with patch("pathlib.Path.exists") as mock_exists:
+                mock_exists.side_effect = [False, True]
+                with patch("pathlib.Path.resolve", return_value=Path("/current/test")):
+                    result = orchestrator._resolve_recording_path("test")
+                    assert result is not None
+
+            # test path not found
+            with patch("pathlib.Path.exists", return_value=False):
+                result = orchestrator._resolve_recording_path("nonexistent")
+                assert result is None

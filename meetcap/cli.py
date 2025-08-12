@@ -47,6 +47,85 @@ app = typer.Typer(
 )
 
 
+class BackupManager:
+    """manages file backups for reprocessing operations"""
+
+    def __init__(self):
+        """initialize backup manager."""
+        self.backups = []
+
+    def create_backup(self, file_path: Path) -> Path | None:
+        """
+        create backup with .backup extension.
+
+        args:
+            file_path: path to file to backup
+
+        returns:
+            path to backup file or None if file doesn't exist
+        """
+        if not file_path.exists():
+            return None
+
+        backup_path = file_path.with_suffix(file_path.suffix + ".backup")
+        try:
+            import shutil
+
+            shutil.copy2(file_path, backup_path)
+            self.backups.append(backup_path)
+            return backup_path
+        except Exception as e:
+            logger.error(f"failed to create backup for {file_path}: {e}")
+            return None
+
+    def restore_backup(self, file_path: Path) -> bool:
+        """
+        restore from backup if exists.
+
+        args:
+            file_path: original file path to restore
+
+        returns:
+            True if restored, False otherwise
+        """
+        backup_path = file_path.with_suffix(file_path.suffix + ".backup")
+        if backup_path.exists():
+            try:
+                import shutil
+
+                shutil.move(str(backup_path), str(file_path))
+                if backup_path in self.backups:
+                    self.backups.remove(backup_path)
+                return True
+            except Exception as e:
+                logger.error(f"failed to restore backup for {file_path}: {e}")
+                return False
+        return False
+
+    def cleanup_backups(self, directory: Path) -> None:
+        """
+        remove all .backup files after success.
+
+        args:
+            directory: directory to clean up
+        """
+        for backup_file in directory.glob("*.backup"):
+            try:
+                backup_file.unlink()
+            except Exception as e:
+                logger.warning(f"failed to remove backup {backup_file}: {e}")
+        self.backups.clear()
+
+    def restore_all(self) -> None:
+        """restore all tracked backups."""
+        for backup_path in list(self.backups):  # copy list to avoid modification during iteration
+            # remove .backup suffix to get original path
+            backup_str = str(backup_path)
+            if backup_str.endswith(".backup"):
+                original_path = Path(backup_str[:-7])  # remove last 7 chars (".backup")
+                self.restore_backup(original_path)
+
+
 class RecordingOrchestrator:
     """orchestrates the recording, transcription, and summarization workflow"""
 
@@ -284,46 +363,23 @@ class RecordingOrchestrator:
 
         console.print()  # new line after progress
 
-    def _process_recording(
+    def _process_audio_to_transcript(
         self,
-        audio_path: Path,
-        stt_engine: str,
-        llm_path: str | None,
-        seed: int | None,
-    ) -> None:
+        audio_file: Path,
+        base_path: Path,
+        stt_engine: str | None = None,
+    ) -> tuple[Path, Path] | None:
         """
-        process recorded audio: transcribe and summarize.
+        process audio file to transcript.
 
         args:
-            audio_path: path to recording directory or audio file
-            stt_engine: stt engine to use
-            llm_path: optional llm model path
-            seed: optional random seed
+            audio_file: path to audio file
+            base_path: base path for output files
+            stt_engine: optional stt engine override
+
+        returns:
+            tuple of (text_path, json_path) or None if failed
         """
-        # handle both directory and file inputs
-        if audio_path.is_dir():
-            # called from recording workflow - directory-based
-            recording_dir = audio_path
-            audio_file = recording_dir / "recording.wav"
-            is_recording_workflow = True
-        else:
-            # called from summarize command - file-based
-            recording_dir = None
-            audio_file = audio_path
-            is_recording_workflow = False
-
-        if not audio_file.exists():
-            console.print(f"[red]error: audio file not found: {audio_file}[/red]")
-            return
-
-        # base_path for saving files
-        if is_recording_workflow:
-            base_path = recording_dir / "recording"
-        else:
-            # for standalone files, use file stem in same directory
-            base_path = audio_file.parent / audio_file.stem
-
-        # transcription
         console.print("\n[bold]📝 transcription[/bold]")
 
         # use configured engine if not specified
@@ -367,11 +423,30 @@ class RecordingOrchestrator:
         try:
             transcript_result = stt_service.transcribe(audio_file)
             text_path, json_path = save_transcript(transcript_result, base_path)
+            return text_path, json_path
         except Exception as e:
             console.print(f"[red]transcription failed: {e}[/red]")
-            return
+            return None
 
-        # summarization
+    def _process_transcript_to_summary(
+        self,
+        transcript_path: Path,
+        base_path: Path,
+        llm_path: str | None = None,
+        seed: int | None = None,
+    ) -> Path | None:
+        """
+        process transcript to summary.
+
+        args:
+            transcript_path: path to transcript text file
+            base_path: base path for output files
+            llm_path: optional llm model path
+            seed: optional random seed
+
+        returns:
+            path to summary file or None if failed
+        """
         console.print("\n[bold]🤖 summarization[/bold]")
 
         # use provided path or default from config
@@ -387,7 +462,7 @@ class RecordingOrchestrator:
             llm_path = ensure_qwen_model(models_dir)
             if not llm_path:
                 console.print("[red]failed to download llm model[/red]")
-                return
+                return None
 
         llm_config = self.config.get_section("llm")
 
@@ -404,14 +479,73 @@ class RecordingOrchestrator:
 
         try:
             # read transcript text
-            with open(text_path, encoding="utf-8") as f:
+            with open(transcript_path, encoding="utf-8") as f:
                 transcript_text = f.read()
 
             summary = llm_service.summarize(transcript_text)
             summary_path = save_summary(summary, base_path)
+            return summary_path
         except Exception as e:
             console.print(f"[red]summarization failed: {e}[/red]")
+            return None
+
+    def _process_recording(
+        self,
+        audio_path: Path,
+        stt_engine: str,
+        llm_path: str | None,
+        seed: int | None,
+    ) -> None:
+        """
+        process recorded audio: transcribe and summarize.
+
+        args:
+            audio_path: path to recording directory or audio file
+            stt_engine: stt engine to use
+            llm_path: optional llm model path
+            seed: optional random seed
+        """
+        # handle both directory and file inputs
+        if audio_path.is_dir():
+            # called from recording workflow - directory-based
+            recording_dir = audio_path
+            audio_file = recording_dir / "recording.wav"
+            is_recording_workflow = True
+        else:
+            # called from summarize command - file-based
+            recording_dir = None
+            audio_file = audio_path
+            is_recording_workflow = False
+
+        if not audio_file.exists():
+            console.print(f"[red]error: audio file not found: {audio_file}[/red]")
             return
+
+        # base_path for saving files
+        if is_recording_workflow:
+            base_path = recording_dir / "recording"
+        else:
+            # for standalone files, use file stem in same directory
+            base_path = audio_file.parent / audio_file.stem
+
+        # transcription
+        result = self._process_audio_to_transcript(audio_file, base_path, stt_engine)
+        if not result:
+            return
+        text_path, json_path = result
+
+        # summarization
+        summary_path = self._process_transcript_to_summary(text_path, base_path, llm_path, seed)
+        if not summary_path:
+            return
+
+        # read transcript text for title extraction
+        with open(text_path, encoding="utf-8") as f:
+            transcript_text = f.read()
+
+        # read summary for title extraction
+        with open(summary_path, encoding="utf-8") as f:
+            summary = f.read()
 
         # only organize into directories for recording workflow
         if is_recording_workflow:
@@ -472,6 +606,228 @@ class RecordingOrchestrator:
                     expand=False,
                 )
             )
+
+    def _resolve_recording_path(self, path_str: str) -> Path | None:
+        """
+        resolve recording directory path from user input.
+
+        args:
+            path_str: user-provided path (absolute or relative)
+
+        returns:
+            resolved path or None if not found
+        """
+        path = Path(path_str)
+
+        # check if absolute path exists
+        if path.is_absolute() and path.exists():
+            return path
+
+        # check current directory
+        if path.exists():
+            return path.resolve()
+
+        # check against configured output directory
+        output_dir = self.config.expand_path(self.config.get("paths", "out_dir"))
+        candidate = output_dir / path_str
+        if candidate.exists():
+            return candidate
+
+        # try partial matching for directory names
+        if output_dir.exists():
+            for item in output_dir.iterdir():
+                if item.is_dir() and path_str.lower() in item.name.lower():
+                    return item
+
+        return None
+
+    def _reprocess_recording(
+        self,
+        recording_dir: Path,
+        mode: str = "stt",
+        stt_engine: str | None = None,
+        llm_model: str | None = None,
+        skip_confirm: bool = False,
+    ) -> None:
+        """
+        reprocess a recording with new models.
+
+        args:
+            recording_dir: path to recording directory
+            mode: reprocessing mode ("stt" or "summary")
+            stt_engine: optional stt engine override
+            llm_model: optional llm model path override
+            skip_confirm: skip confirmation prompt
+        """
+        # validate recording directory
+        audio_file = recording_dir / "recording.wav"
+        if not audio_file.exists():
+            console.print(
+                "[red]error: not a valid recording directory (missing recording.wav)[/red]"
+            )
+            return
+
+        # check existing files
+        transcript_txt = recording_dir / "recording.transcript.txt"
+        transcript_json = recording_dir / "recording.transcript.json"
+        summary_md = recording_dir / "recording.summary.md"
+
+        # for summary mode, transcript must exist
+        if mode == "summary" and not transcript_txt.exists():
+            console.print("[red]error: no transcript found to reprocess[/red]")
+            console.print("[yellow]run with --mode stt to generate transcript first[/yellow]")
+            return
+
+        # resolve actual STT engine being used
+        actual_stt_engine = stt_engine
+        if not actual_stt_engine and mode == "stt":
+            config_stt = self.config.get("models", "stt_engine", "faster-whisper")
+            if config_stt == "faster-whisper":
+                actual_stt_engine = "fwhisper"
+            elif config_stt == "mlx-whisper":
+                actual_stt_engine = "mlx"
+            else:
+                actual_stt_engine = config_stt
+
+        # get specific model name for display
+        stt_display = ""
+        if mode == "stt":
+            if actual_stt_engine == "fwhisper":
+                model_name = self.config.get("models", "stt_model_name", "large-v3")
+                stt_display = f"faster-whisper ({model_name})"
+            elif actual_stt_engine == "mlx":
+                model_name = self.config.get(
+                    "models", "mlx_stt_model_name", "mlx-community/whisper-large-v3-turbo"
+                )
+                # shorten the display name for mlx models
+                short_name = model_name.split("/")[-1] if "/" in model_name else model_name
+                stt_display = f"mlx-whisper ({short_name})"
+            else:
+                stt_display = "whisper.cpp"
+
+            if not stt_engine:
+                stt_display += " (default)"
+
+        # resolve actual LLM model being used
+        actual_llm_path = llm_model
+        if not actual_llm_path:
+            actual_llm_path = str(
+                self.config.expand_path(self.config.get("models", "llm_gguf_path"))
+            )
+
+        # extract model name from path for display
+        llm_display = Path(actual_llm_path).name if actual_llm_path else "Qwen3-4B-Thinking"
+        if not llm_model:
+            llm_display += " (default)"
+
+        # show confirmation prompt
+        if not skip_confirm:
+            console.print(
+                Panel(
+                    f"[bold]📁 recording to reprocess:[/bold] {recording_dir.name}\n"
+                    f"   location: {recording_dir.absolute()}\n\n"
+                    f"[bold]📋 current files:[/bold]\n"
+                    f"   • recording.wav ({audio_file.stat().st_size / 1024 / 1024:.1f} MB)\n"
+                    + (
+                        f"   • recording.transcript.txt ({transcript_txt.stat().st_size / 1024:.1f} KB)\n"
+                        if transcript_txt.exists()
+                        else ""
+                    )
+                    + (
+                        f"   • recording.summary.md ({summary_md.stat().st_size / 1024:.1f} KB)\n"
+                        if summary_md.exists()
+                        else ""
+                    )
+                    + f"\n[bold]🔄 reprocessing mode:[/bold] {mode.upper()}"
+                    + (
+                        " (audio → transcript → summary)"
+                        if mode == "stt"
+                        else " (transcript → summary)"
+                    )
+                    + (f"\n   stt engine: {stt_display}" if mode == "stt" else "")
+                    + f"\n   llm model: {llm_display}\n\n"
+                    f"[yellow]⚠️  this will overwrite existing files.[/yellow]\n"
+                    f"    backups will be created before processing.",
+                    title="reprocess confirmation",
+                    expand=False,
+                )
+            )
+
+            confirm = typer.confirm("continue?", default=False)
+            if not confirm:
+                console.print("[yellow]reprocessing cancelled[/yellow]")
+                return
+
+        # create backup manager
+        backup_manager = BackupManager()
+
+        try:
+            # create backups
+            console.print("\n[bold][1/4] creating backups...[/bold]", end=" ")
+            if mode == "stt":
+                # backup transcript and summary
+                if transcript_txt.exists():
+                    backup_manager.create_backup(transcript_txt)
+                if transcript_json.exists():
+                    backup_manager.create_backup(transcript_json)
+                if summary_md.exists():
+                    backup_manager.create_backup(summary_md)
+            else:
+                # backup only summary
+                if summary_md.exists():
+                    backup_manager.create_backup(summary_md)
+            console.print("[green]✓[/green]")
+
+            base_path = recording_dir / "recording"
+
+            if mode == "stt":
+                # reprocess from audio
+                console.print("[bold][2/4] transcribing audio...[/bold]")
+                result = self._process_audio_to_transcript(audio_file, base_path, stt_engine)
+                if not result:
+                    raise Exception("transcription failed")
+                text_path, json_path = result
+
+                console.print("[bold][3/4] generating summary...[/bold]")
+                summary_path = self._process_transcript_to_summary(text_path, base_path, llm_model)
+                if not summary_path:
+                    raise Exception("summarization failed")
+            else:
+                # reprocess from existing transcript
+                console.print(
+                    "[bold][2/4] skipping transcription (using existing)[/bold] [green]✓[/green]"
+                )
+                text_path = transcript_txt
+
+                console.print("[bold][3/4] generating summary...[/bold]")
+                summary_path = self._process_transcript_to_summary(text_path, base_path, llm_model)
+                if not summary_path:
+                    raise Exception("summarization failed")
+
+            # cleanup backups on success
+            console.print("[bold][4/4] cleaning up...[/bold]", end=" ")
+            backup_manager.cleanup_backups(recording_dir)
+            console.print("[green]✓[/green]")
+
+            # show results
+            console.print(
+                Panel(
+                    "[green]✅ reprocessing complete![/green]\n\n"
+                    "[bold]updated files:[/bold]\n"
+                    + (f"   • transcript: {text_path.absolute()}\n" if mode == "stt" else "")
+                    + f"   • summary: {summary_path.absolute()}",
+                    title="📦 results",
+                    expand=False,
+                )
+            )
+
+        except Exception as e:
+            # restore from backups on failure
+            console.print(f"\n[red]error during reprocessing: {e}[/red]")
+            console.print("[yellow]restoring from backups...[/yellow]")
+            backup_manager.restore_all()
+            console.print("[yellow]files restored to original state[/yellow]")
+            raise
 
 
 @app.command()
@@ -639,6 +995,75 @@ def summarize(
         sys.exit(1)
     except Exception as e:
         console.print(f"[red]error processing file: {e}[/red]")
+        ErrorHandler.handle_runtime_error(e)
+
+
+@app.command()
+def reprocess(
+    path: str = typer.Argument(
+        ...,
+        help="path to recording directory (absolute or relative)",
+    ),
+    mode: str = typer.Option(
+        "stt",
+        "--mode",
+        "-m",
+        help="reprocessing mode: 'stt' (audio→transcript→summary) or 'summary' (transcript→summary)",
+    ),
+    stt: str | None = typer.Option(
+        None,
+        "--stt",
+        help="stt engine override: 'fwhisper', 'mlx', or 'whisper.cpp'",
+    ),
+    llm: str | None = typer.Option(
+        None,
+        "--llm",
+        help="path to llm model GGUF file",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="skip confirmation prompt",
+    ),
+) -> None:
+    """reprocess a recording with different models"""
+    config = Config()
+    orchestrator = RecordingOrchestrator(config)
+
+    # validate mode
+    if mode not in ["stt", "summary"]:
+        console.print(f"[red]error: invalid mode '{mode}'[/red]")
+        console.print("[yellow]use --mode stt or --mode summary[/yellow]")
+        raise typer.Exit(1)
+
+    # validate stt engine if provided
+    if stt and stt not in ["fwhisper", "mlx", "whisper.cpp"]:
+        console.print(f"[red]error: invalid stt engine '{stt}'[/red]")
+        console.print("[yellow]use --stt fwhisper, mlx, or whisper.cpp[/yellow]")
+        raise typer.Exit(1)
+
+    # resolve recording path
+    recording_dir = orchestrator._resolve_recording_path(path)
+    if not recording_dir:
+        console.print(f"[red]error: recording directory not found: {path}[/red]")
+        console.print("\n[yellow]hints:[/yellow]")
+        console.print("  • use absolute path: /path/to/recording")
+        console.print("  • use relative path: 2025_Jan_15_TeamMeeting")
+        console.print("  • check configured output directory:")
+        console.print(f"    {config.expand_path(config.get('paths', 'out_dir'))}")
+        raise typer.Exit(1)
+
+    try:
+        orchestrator._reprocess_recording(
+            recording_dir=recording_dir,
+            mode=mode,
+            stt_engine=stt,
+            llm_model=llm,
+            skip_confirm=yes,
+        )
+    except Exception as e:
+        console.print(f"[red]reprocessing failed: {e}[/red]")
         ErrorHandler.handle_runtime_error(e)
 
 

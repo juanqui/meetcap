@@ -52,6 +52,9 @@ meetcap/
 ## Commands
 
 ### Development
+
+**Important**: Always use `hatch run` to execute Python commands in the development environment. This ensures the correct virtual environment and dependencies are used.
+
 ```bash
 # Create/update environment
 hatch env create
@@ -61,6 +64,8 @@ hatch run meetcap record                    # Record from audio device
 hatch run meetcap record --stt mlx          # Record with mlx-whisper (Apple Silicon)
 hatch run meetcap summarize                 # Process existing audio file
 hatch run meetcap summarize --stt mlx       # Process with mlx-whisper
+hatch run meetcap reprocess                 # Reprocess a recording with different models
+hatch run meetcap reprocess --mode summary  # Reprocess only the summary
 hatch run meetcap devices                   # List audio devices
 hatch run meetcap verify                    # Quick verification
 hatch run meetcap setup                     # Interactive setup wizard
@@ -75,12 +80,23 @@ hatch run fmt
 hatch run lint
 ```
 
+### Python Script Execution
+
+When running Python scripts or one-liners in the development environment:
+```bash
+# Always prefix Python commands with 'hatch run'
+hatch run python script.py
+hatch run python -c "import meetcap; print(meetcap.__version__)"
+
+# This ensures proper environment activation and dependency resolution
+```
+
 ### Testing Audio Recording
 ```bash
 # Test device listing
 hatch run meetcap devices
 
-# Test 10-second recording
+# Test 10-second recording (note the 'hatch run python' prefix)
 hatch run python -c "
 from meetcap.core.recorder import AudioRecorder
 from meetcap.core.devices import list_audio_devices, select_best_device
@@ -209,9 +225,56 @@ feat: add mlx-whisper support for Apple Silicon optimization
 
 **Important**: Do not mention Claude or AI assistance in commit messages.
 
+## Reprocess Workflow
+
+The reprocess command allows reprocessing existing recordings with different models:
+
+### Usage
+```bash
+# Reprocess both transcript and summary (default)
+hatch run meetcap reprocess 2025_Jan_15_TeamStandup
+
+# Reprocess only the summary from existing transcript
+hatch run meetcap reprocess recording_dir --mode summary
+
+# Use different STT engine
+hatch run meetcap reprocess /path/to/recording --stt mlx
+
+# Use custom LLM model
+hatch run meetcap reprocess recording_dir --llm ~/.meetcap/models/custom.gguf
+
+# Skip confirmation prompt
+hatch run meetcap reprocess recording_dir --yes
+```
+
+### Features
+- **Path Resolution**: Supports absolute and relative paths, with fuzzy matching
+- **Backup System**: Creates `.backup` files before reprocessing, restores on failure
+- **Two Modes**:
+  - `stt`: Reprocess audio → transcript → summary
+  - `summary`: Keep existing transcript, regenerate summary only
+- **Model Override**: Specify different STT engines or LLM models
+- **Confirmation Prompt**: Shows current files and what will be reprocessed
+- **Progress Display**: Clear step-by-step progress indicators
+
+### Implementation Details
+- `BackupManager` class handles backup/restore operations
+- `_resolve_recording_path()` handles flexible path resolution
+- `_reprocess_recording()` orchestrates the reprocessing workflow
+- Refactored `_process_recording()` into modular methods:
+  - `_process_audio_to_transcript()`
+  - `_process_transcript_to_summary()`
+
 ## Important Implementation Notes
 - Subprocess management for ffmpeg is critical
 - Graceful shutdown with 'q' to ffmpeg stdin
 - Hotkey debouncing to prevent double triggers
 - Model lazy loading to reduce startup time
 - Chunking for long transcripts in LLM
+- Backup files are automatically cleaned up after successful reprocessing
+
+## Development Environment Notes
+- **Always use `hatch run`**: This project uses Hatch for dependency management. All Python commands must be prefixed with `hatch run` to ensure the correct virtual environment is activated.
+- **Module imports**: Without `hatch run`, you'll get `ModuleNotFoundError: No module named 'meetcap'`
+- **Testing**: Use `hatch run test` for running the test suite with proper coverage reporting
+- **Formatting**: Use `hatch run fmt` and `hatch run lint` for code quality checks

@@ -97,6 +97,31 @@ meetcap summarize path/to/meeting.m4a
 meetcap summarize recording.m4a --out ./results
 ```
 
+### Reprocess Recordings
+
+```bash
+# Reprocess both transcript and summary with different models
+meetcap reprocess 2025_Jan_15_TeamStandup
+
+# Reprocess only the summary (keep existing transcript)
+meetcap reprocess 2025_Jan_15_TeamStandup --mode summary
+
+# Use a different STT engine for transcription
+meetcap reprocess /path/to/recording --stt mlx
+
+# Use a custom LLM model for summarization
+meetcap reprocess recording_dir --llm ~/.meetcap/models/custom_model.gguf
+
+# Skip confirmation prompt
+meetcap reprocess recording_dir --yes
+```
+
+The reprocess command allows you to regenerate transcripts and summaries with different models, useful for:
+- Testing different STT engines (faster-whisper vs mlx-whisper)
+- Trying different LLM models for better summaries
+- Fixing issues with previous processing
+- Experimenting with model settings
+
 ### Commands
 
 ```bash
@@ -114,6 +139,9 @@ meetcap record --device "Aggregate Device" --out ~/MyRecordings
 
 # Process existing audio file (m4a, wav, mp3, etc.)
 meetcap summarize samples/meeting.m4a --out ./processed
+
+# Reprocess a recording with different models
+meetcap reprocess 2025_Jan_15_TeamStandup --mode stt
 ```
 
 ### Configuration
