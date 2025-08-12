@@ -5,7 +5,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from meetcap.services.summarization import SummarizationService, save_summary
+from meetcap.services.summarization import SummarizationService, extract_meeting_title, save_summary
 
 
 class TestSummarizationService:
@@ -496,3 +496,67 @@ Proceed with phase 2
         saved_content = saved_file.read_text()
         assert "# Meeting Summary" in saved_content
         assert "Project milestone reached" in saved_content
+
+
+class TestExtractMeetingTitle:
+    """test extract_meeting_title function"""
+
+    def test_extract_from_meeting_title_section(self):
+        """test extracting title from Meeting Title section"""
+        summary = """## Meeting Title
+ProductRoadmap
+
+## Summary
+This was a product roadmap meeting..."""
+
+        title = extract_meeting_title(summary)
+        assert title == "ProductRoadmap"
+
+    def test_extract_with_spaces(self):
+        """test extracting title with spaces that should be removed"""
+        summary = """## Meeting Title
+Product Roadmap Review
+
+## Summary
+Discussion about the product..."""
+
+        title = extract_meeting_title(summary)
+        assert title == "ProductRoadmapReview"
+
+    def test_fallback_to_summary_keywords(self):
+        """test fallback when no Meeting Title section"""
+        summary = """## Summary
+The Engineering Team discussed Sprint Planning for the next iteration..."""
+
+        title = extract_meeting_title(summary)
+        # should extract capitalized words from summary
+        assert "Engineering" in title or "Team" in title or "Sprint" in title
+
+    def test_fallback_to_transcript_keywords(self):
+        """test fallback to transcript when no good title found"""
+        summary = "## Summary\nwe talked about things"
+        transcript = "project project project review review development sprint sprint sprint"
+
+        title = extract_meeting_title(summary, transcript)
+        # should use most common words
+        assert "Meeting" in title  # always adds Meeting suffix in this case
+        assert len(title) > 7  # should have meaningful content
+
+    def test_fallback_to_untitled(self):
+        """test absolute fallback when nothing works"""
+        summary = "random text"
+
+        title = extract_meeting_title(summary)
+        assert title == "UntitledMeeting"
+
+    def test_remove_markdown_formatting(self):
+        """test removal of markdown formatting from title"""
+        summary = """## Meeting Title
+**ProductLaunch**
+
+## Summary
+Launch planning..."""
+
+        title = extract_meeting_title(summary)
+        assert title == "ProductLaunch"
+        assert "*" not in title

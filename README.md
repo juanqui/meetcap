@@ -179,11 +179,42 @@ Grant these permissions to your terminal app:
 
 ## Output Files
 
-Each recording session creates:
-- `YYYYmmdd-HHMMSS.wav` - Audio recording
-- `YYYYmmdd-HHMMSS.transcript.txt` - Plain text transcript
-- `YYYYmmdd-HHMMSS.transcript.json` - Transcript with timestamps
-- `YYYYmmdd-HHMMSS.summary.md` - Meeting summary with decisions and action items
+Each recording session creates a dedicated folder with all meeting artifacts organized together:
+
+```
+~/Recordings/meetcap/
+├── 2025_Jan_15_TeamStandup/
+│   ├── recording.wav                 # Audio recording
+│   ├── recording.transcript.txt      # Plain text transcript
+│   ├── recording.transcript.json     # Transcript with timestamps
+│   └── recording.summary.md          # Meeting summary with AI-generated insights
+├── 2025_Jan_16_ProductReview/
+│   └── ... (same structure)
+└── ...
+```
+
+### Folder Naming Convention
+
+Meeting folders are automatically named using:
+- **Date**: `YYYY_MMM_DD` format (e.g., `2025_Jan_15`)
+- **Title**: AI-generated from meeting content in PascalCase (e.g., `TeamStandup`)
+
+The AI analyzes your meeting transcript to generate a concise, descriptive title that captures the main topic discussed.
+
+### Configuring Output Directory
+
+The default output directory is `~/Recordings/meetcap/`. You can change this:
+
+1. **During setup**: Run `meetcap setup` and specify your preferred directory
+2. **In config file**: Edit `~/.meetcap/config.toml`:
+   ```toml
+   [paths]
+   out_dir = "~/Documents/MyMeetings"  # Your custom path
+   ```
+3. **Via environment variable**:
+   ```bash
+   export MEETCAP_OUT_DIR="~/Documents/MyMeetings"
+   ```
 
 ## License
 

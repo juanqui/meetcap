@@ -67,7 +67,7 @@ class AudioRecorder:
             output_path: optional custom output path
 
         returns:
-            path to output wav file
+            path to the recording directory (not the file)
 
         raises:
             runtimeerror: if already recording or ffmpeg fails
@@ -75,10 +75,13 @@ class AudioRecorder:
         if self.session is not None:
             raise RuntimeError("recording already in progress")
 
-        # generate output filename if not provided
+        # generate output directory and filename if not provided
         if output_path is None:
             timestamp = time.strftime("%Y%m%d-%H%M%S")
-            output_path = self.output_dir / f"{timestamp}.wav"
+            # create temporary directory for this recording session
+            recording_dir = self.output_dir / f"{timestamp}-temp"
+            recording_dir.mkdir(parents=True, exist_ok=True)
+            output_path = recording_dir / "recording.wav"
 
         # build ffmpeg command for single aggregate input
         cmd = [
@@ -129,7 +132,8 @@ class AudioRecorder:
             console.print(f"  device: {device_name} (index {device_index})")
             console.print(f"  format: {self.sample_rate} hz, {self.channels} channels")
 
-            return output_path
+            # return the directory path, not the file path
+            return output_path.parent
 
         except Exception as e:
             self.session = None
@@ -152,7 +156,7 @@ class AudioRecorder:
             output_path: optional custom output path
 
         returns:
-            path to output wav file
+            path to the recording directory (not the file)
 
         raises:
             runtimeerror: if already recording or ffmpeg fails
@@ -160,10 +164,13 @@ class AudioRecorder:
         if self.session is not None:
             raise RuntimeError("recording already in progress")
 
-        # generate output filename if not provided
+        # generate output directory and filename if not provided
         if output_path is None:
             timestamp = time.strftime("%Y%m%d-%H%M%S")
-            output_path = self.output_dir / f"{timestamp}.wav"
+            # create temporary directory for this recording session
+            recording_dir = self.output_dir / f"{timestamp}-temp"
+            recording_dir.mkdir(parents=True, exist_ok=True)
+            output_path = recording_dir / "recording.wav"
 
         # build ffmpeg command for dual input with amix
         cmd = [
@@ -219,7 +226,8 @@ class AudioRecorder:
             console.print(f"  microphone index: {mic_index}")
             console.print(f"  format: {self.sample_rate} hz, mixed to stereo")
 
-            return output_path
+            # return the directory path, not the file path
+            return output_path.parent
 
         except Exception as e:
             self.session = None
@@ -235,7 +243,7 @@ class AudioRecorder:
             timeout: max seconds to wait for graceful shutdown
 
         returns:
-            path to recorded file or none if no recording
+            path to recording directory or none if no recording
         """
         if self.session is None:
             return None
@@ -272,7 +280,8 @@ class AudioRecorder:
                 console.print(
                     f"[green]✓[/green] recording saved: {output_path.name} ({duration:.1f} seconds)"
                 )
-                return output_path
+                # return the directory path, not the file path
+                return output_path.parent
             else:
                 console.print("[yellow]⚠[/yellow] recording file is empty or corrupted")
                 if output_path.exists():

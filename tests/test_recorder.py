@@ -79,12 +79,15 @@ class TestAudioRecorder:
         """test successful recording start"""
         with patch("time.time", return_value=1234567890):
             with patch("time.strftime", return_value="20240101-120000"):
-                output_path = recorder.start_recording(device_index=1, device_name="Test Device")
+                with patch("pathlib.Path.mkdir"):
+                    output_path = recorder.start_recording(
+                        device_index=1, device_name="Test Device"
+                    )
 
         assert recorder.session is not None
         assert recorder.session.device_name == "Test Device"
         assert recorder.session.start_time == 1234567890
-        assert output_path.name == "20240101-120000.wav"
+        assert output_path.name == "20240101-120000-temp"  # now returns directory
 
         # verify ffmpeg command
         mock_popen.assert_called_once()
@@ -120,7 +123,8 @@ class TestAudioRecorder:
             device_index=0, device_name="Test", output_path=custom_path
         )
 
-        assert output_path == custom_path
+        # now returns parent directory
+        assert output_path == custom_path.parent
 
     def test_start_dual_recording_success(self, recorder, mock_popen, mock_console):
         """test successful dual device recording"""
@@ -166,7 +170,7 @@ class TestAudioRecorder:
 
         result = recorder.stop_recording()
 
-        assert result == output_file
+        assert result == output_file.parent  # now returns directory
         assert recorder.session is None
         mock_process.stdin.write.assert_called_with(b"q")
         mock_process.wait.assert_called()
@@ -194,7 +198,7 @@ class TestAudioRecorder:
 
         result = recorder.stop_recording()
 
-        assert result == output_file
+        assert result == output_file.parent  # now returns directory
         mock_process.terminate.assert_called_once()
 
     def test_stop_recording_force_kill(self, recorder, temp_dir):
@@ -224,7 +228,7 @@ class TestAudioRecorder:
 
         result = recorder.stop_recording()
 
-        assert result == output_file
+        assert result == output_file.parent  # now returns directory
         mock_process.kill.assert_called_once()
 
     def test_stop_recording_no_session(self, recorder):
@@ -379,16 +383,17 @@ class TestRecorderIntegration:
         mock_popen.return_value = mock_process
 
         # start recording
-        output_path = recorder.start_recording(device_index=0, device_name="Test Device")
+        output_dir = recorder.start_recording(device_index=0, device_name="Test Device")
         assert recorder.is_recording()
         assert recorder.get_elapsed_time() >= 0
 
-        # create mock file
-        output_path.write_bytes(b"x" * 100)
+        # create mock file in the directory
+        output_file = output_dir / "recording.wav"
+        output_file.write_bytes(b"x" * 100)
 
         # stop recording
         result = recorder.stop_recording()
-        assert result == output_path
+        assert result == output_dir
         assert not recorder.is_recording()
         assert recorder.get_elapsed_time() == 0.0
 
@@ -406,13 +411,14 @@ class TestRecorderIntegration:
         mock_popen.return_value = mock_process
 
         # start dual recording
-        output_path = recorder.start_dual_recording(blackhole_index=1, mic_index=2)
+        output_dir = recorder.start_dual_recording(blackhole_index=1, mic_index=2)
         assert recorder.is_recording()
 
-        # create mock file
-        output_path.write_bytes(b"x" * 100)
+        # create mock file in the directory
+        output_file = output_dir / "recording.wav"
+        output_file.write_bytes(b"x" * 100)
 
         # stop recording
         result = recorder.stop_recording()
-        assert result == output_path
+        assert result == output_dir
         assert not recorder.is_recording()

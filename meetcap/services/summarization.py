@@ -104,6 +104,10 @@ class SummarizationService:
         system_prompt = (
             "you are an expert meeting note-taker who creates comprehensive, actionable meeting summaries. "
             "analyze the transcript and produce detailed notes with these exact sections:\n\n"
+            "## Meeting Title\n"
+            "generate a concise title (2-4 words) that captures the main topic of the meeting.\n"
+            "the title should be in PascalCase with no spaces (e.g., 'ProductRoadmap', 'TeamRetrospective').\n"
+            "write only the title on a single line, nothing else in this section.\n\n"
             "## Summary\n"
             "provide a comprehensive 3-5 paragraph summary covering:\n"
             "- main topics discussed and context\n"
@@ -343,3 +347,72 @@ def save_summary(summary_text: str, base_path: Path) -> Path:
     console.print(f"[green]✓[/green] summary saved: {summary_path}")
 
     return summary_path
+
+
+def extract_meeting_title(summary_text: str, transcript_text: str = "") -> str:
+    """
+    extract meeting title from summary or generate from transcript.
+
+    args:
+        summary_text: generated summary with meeting title section
+        transcript_text: optional transcript for fallback title generation
+
+    returns:
+        meeting title in PascalCase format (no spaces)
+    """
+    import re
+
+    # try to extract from ## Meeting Title section
+    title_match = re.search(r"## Meeting Title\s*\n([^\n]+)", summary_text, re.IGNORECASE)
+    if title_match:
+        title = title_match.group(1).strip()
+        # remove any markdown formatting
+        title = re.sub(r"[*_`'\"]", "", title)
+        # if already in PascalCase with no spaces, return as-is
+        if " " not in title and title[0].isupper():
+            return title
+        # otherwise ensure PascalCase (remove spaces and capitalize)
+        title = "".join(word.capitalize() for word in title.split())
+        if title and len(title) > 2:
+            return title
+
+    # fallback: try to extract from first few words of summary
+    summary_match = re.search(r"## Summary\s*\n([^\n]+)", summary_text, re.IGNORECASE)
+    if summary_match:
+        first_line = summary_match.group(1).strip()
+        # extract key words (nouns/verbs)
+        words = re.findall(r"\b[A-Z][a-z]+\b", first_line)
+        if len(words) >= 2:
+            title = "".join(words[:3])  # take first 2-3 capitalized words
+            if title and len(title) > 2:
+                return title
+
+    # last resort: generate from transcript keywords
+    if transcript_text:
+        # find most common meaningful words
+        words = re.findall(r"\b[a-z]{4,}\b", transcript_text.lower())
+        if words:
+            from collections import Counter
+
+            word_counts = Counter(words)
+            # filter out common words
+            common_words = {
+                "that",
+                "this",
+                "with",
+                "from",
+                "have",
+                "been",
+                "will",
+                "would",
+                "could",
+                "should",
+            }
+            filtered = [(w, c) for w, c in word_counts.most_common(10) if w not in common_words]
+            if filtered:
+                # take top 2 words and capitalize
+                title_words = [word.capitalize() for word, _ in filtered[:2]]
+                return "".join(title_words) + "Meeting"
+
+    # absolute fallback
+    return "UntitledMeeting"

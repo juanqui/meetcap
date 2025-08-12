@@ -29,7 +29,7 @@ from meetcap.services.model_download import (
     verify_qwen_model,
     verify_whisper_model,
 )
-from meetcap.services.summarization import SummarizationService, save_summary
+from meetcap.services.summarization import SummarizationService, extract_meeting_title, save_summary
 from meetcap.services.transcription import (
     FasterWhisperService,
     MlxWhisperService,
@@ -295,12 +295,33 @@ class RecordingOrchestrator:
         process recorded audio: transcribe and summarize.
 
         args:
-            audio_path: path to recorded audio
+            audio_path: path to recording directory or audio file
             stt_engine: stt engine to use
             llm_path: optional llm model path
             seed: optional random seed
         """
-        base_path = audio_path.with_suffix("")
+        # handle both directory and file inputs
+        if audio_path.is_dir():
+            # called from recording workflow - directory-based
+            recording_dir = audio_path
+            audio_file = recording_dir / "recording.wav"
+            is_recording_workflow = True
+        else:
+            # called from summarize command - file-based
+            recording_dir = None
+            audio_file = audio_path
+            is_recording_workflow = False
+
+        if not audio_file.exists():
+            console.print(f"[red]error: audio file not found: {audio_file}[/red]")
+            return
+
+        # base_path for saving files
+        if is_recording_workflow:
+            base_path = recording_dir / "recording"
+        else:
+            # for standalone files, use file stem in same directory
+            base_path = audio_file.parent / audio_file.stem
 
         # transcription
         console.print("\n[bold]📝 transcription[/bold]")
@@ -344,7 +365,7 @@ class RecordingOrchestrator:
             )
 
         try:
-            transcript_result = stt_service.transcribe(audio_path)
+            transcript_result = stt_service.transcribe(audio_file)
             text_path, json_path = save_transcript(transcript_result, base_path)
         except Exception as e:
             console.print(f"[red]transcription failed: {e}[/red]")
@@ -392,19 +413,65 @@ class RecordingOrchestrator:
             console.print(f"[red]summarization failed: {e}[/red]")
             return
 
-        # show final results
-        console.print(
-            Panel(
-                f"[green]✅ recording complete![/green]\n\n"
-                f"[bold]artifacts:[/bold]\n"
-                f"  audio: {audio_path}\n"
-                f"  transcript: {text_path}\n"
-                f"  json: {json_path}\n"
-                f"  summary: {summary_path}",
-                title="📦 output files",
-                expand=False,
+        # only organize into directories for recording workflow
+        if is_recording_workflow:
+            # extract meeting title and rename directory
+            console.print("\n[bold]📁 organizing files[/bold]")
+            meeting_title = extract_meeting_title(summary, transcript_text)
+
+            # generate final directory name with date and title
+            from datetime import datetime
+
+            date_str = datetime.now().strftime("%Y_%b_%d")
+            final_dir_name = f"{date_str}_{meeting_title}"
+            final_dir_path = recording_dir.parent / final_dir_name
+
+            # rename the temporary directory to final name
+            try:
+                recording_dir.rename(final_dir_path)
+                console.print(f"[green]✓[/green] meeting folder: {final_dir_path.absolute()}")
+
+                # update paths to reflect new location
+                audio_file = final_dir_path / "recording.wav"
+                text_path = final_dir_path / "recording.transcript.txt"
+                json_path = final_dir_path / "recording.transcript.json"
+                summary_path = final_dir_path / "recording.summary.md"
+            except Exception as e:
+                console.print(f"[yellow]⚠[/yellow] could not rename folder: {e}")
+                console.print(f"[yellow]keeping temporary name: {recording_dir.name}[/yellow]")
+                final_dir_path = recording_dir
+        else:
+            # for standalone files, paths are already set
+            final_dir_path = audio_file.parent
+
+        # show final results with absolute paths for easy navigation
+        if is_recording_workflow:
+            console.print(
+                Panel(
+                    f"[green]✅ recording complete![/green]\n\n"
+                    f"[bold]artifacts:[/bold]\n"
+                    f"  folder: {final_dir_path.absolute()}\n"
+                    f"  audio: {audio_file.absolute()}\n"
+                    f"  transcript: {text_path.absolute()}\n"
+                    f"  json: {json_path.absolute()}\n"
+                    f"  summary: {summary_path.absolute()}",
+                    title="📦 output files",
+                    expand=False,
+                )
             )
-        )
+        else:
+            # for standalone files, show simpler output with absolute paths
+            console.print(
+                Panel(
+                    f"[green]✅ processing complete![/green]\n\n"
+                    f"[bold]output files:[/bold]\n"
+                    f"  transcript: {text_path.absolute()}\n"
+                    f"  json: {json_path.absolute()}\n"
+                    f"  summary: {summary_path.absolute()}",
+                    title="📦 results",
+                    expand=False,
+                )
+            )
 
 
 @app.command()
@@ -554,10 +621,6 @@ def summarize(
         )
     )
 
-    # create base path for outputs in the output directory
-    base_name = audio_path.stem
-    base_path = output_dir / base_name
-
     # process the file (transcribe and summarize)
     orchestrator = RecordingOrchestrator(config)
     orchestrator.processing_complete = False
@@ -570,19 +633,7 @@ def summarize(
             seed=seed,
         )
         orchestrator.processing_complete = True
-
-        # show completion message
-        console.print(
-            Panel(
-                f"[green]✅ processing complete![/green]\n\n"
-                f"[bold]output files:[/bold]\n"
-                f"  transcript: {base_path}.transcript.txt\n"
-                f"  json: {base_path}.transcript.json\n"
-                f"  summary: {base_path}.summary.md",
-                title="📦 results",
-                expand=False,
-            )
-        )
+        # completion message already shown by _process_recording
     except KeyboardInterrupt:
         console.print("\n[yellow]processing cancelled by user[/yellow]")
         sys.exit(1)
@@ -901,8 +952,30 @@ def setup() -> None:
     else:
         console.print(f"[green]✓[/green] keeping current context size of {selected_ctx['label']}")
 
-    # step 6: select and download llm model
-    console.print("\n[bold]step 6: select llm (summarization) model[/bold]")
+    # step 6: configure output directory
+    console.print("\n[bold]step 6: configure output directory[/bold]")
+    console.print("[cyan]where should recordings be saved?[/cyan]")
+
+    current_out_dir = config.get("paths", "out_dir", "~/Recordings/meetcap")
+    console.print(f"\n[dim]current: {current_out_dir}[/dim]")
+
+    new_out_dir = typer.prompt(
+        "\noutput directory path", default=current_out_dir, show_default=True
+    )
+
+    # expand and validate the path
+    expanded_path = config.expand_path(new_out_dir)
+    try:
+        expanded_path.mkdir(parents=True, exist_ok=True)
+        config.config["paths"]["out_dir"] = new_out_dir
+        config.save()
+        console.print(f"[green]✓[/green] output directory set to: {new_out_dir}")
+    except Exception as e:
+        console.print(f"[yellow]⚠[/yellow] could not create directory: {e}")
+        console.print(f"[yellow]keeping current directory: {current_out_dir}[/yellow]")
+
+    # step 7: select and download llm model
+    console.print("\n[bold]step 7: select llm (summarization) model[/bold]")
 
     llm_models = [
         {
@@ -987,6 +1060,7 @@ def setup() -> None:
     console.print(
         Panel(
             "[green]✅ setup complete![/green]\n\n"
+            f"output directory: {new_out_dir}\n"
             f"context size: {selected_ctx['label']} ({selected_ctx['desc']})\n"
             "you're ready to start recording meetings:\n"
             "[cyan]meetcap record[/cyan]",

@@ -67,7 +67,15 @@ class TestRecordingOrchestrator:
         mock_list_devices.return_value = mock_devices
         mock_recorder = Mock()
         mock_recorder_class.return_value = mock_recorder
-        mock_recorder.start_recording.return_value = Path("/tmp/recording.wav")
+
+        # Create actual temp directory for test
+        import tempfile
+
+        test_dir = Path(tempfile.mkdtemp(suffix="-temp"))
+        (test_dir / "recording.wav").write_bytes(b"fake audio")
+
+        mock_recorder.start_recording.return_value = test_dir
+        mock_recorder.stop_recording.return_value = test_dir
         mock_recorder.is_recording.side_effect = [True, True, False]  # simulate recording then stop
 
         # simulate stop event being set quickly
@@ -138,7 +146,10 @@ class TestRecordingOrchestrator:
 
     def test_process_recording_with_transcription(self, orchestrator, temp_dir):
         """test processing recording with transcription"""
-        audio_file = temp_dir / "test.wav"
+        # Create a recording directory structure
+        recording_dir = temp_dir / "test-temp"
+        recording_dir.mkdir()
+        audio_file = recording_dir / "recording.wav"
         audio_file.write_bytes(b"fake audio")
 
         with patch("meetcap.cli.FasterWhisperService") as mock_stt:
@@ -155,7 +166,7 @@ class TestRecordingOrchestrator:
                 )
 
                 orchestrator._process_recording(
-                    audio_file, stt_engine="fwhisper", llm_path=None, seed=None
+                    recording_dir, stt_engine="fwhisper", llm_path=None, seed=None
                 )
 
                 mock_service.transcribe.assert_called_once_with(audio_file)
@@ -163,10 +174,13 @@ class TestRecordingOrchestrator:
 
     def test_process_recording_with_summarization(self, orchestrator, temp_dir):
         """test processing with both transcription and summarization"""
-        audio_file = temp_dir / "test.wav"
+        # Create a recording directory structure
+        recording_dir = temp_dir / "test-temp"
+        recording_dir.mkdir()
+        audio_file = recording_dir / "recording.wav"
         audio_file.write_bytes(b"fake audio")
 
-        transcript_file = temp_dir / "test.transcript.txt"
+        transcript_file = recording_dir / "recording.transcript.txt"
         transcript_file.write_text("Test transcript content")
 
         with patch("meetcap.cli.FasterWhisperService") as mock_stt:
@@ -185,12 +199,15 @@ class TestRecordingOrchestrator:
                     mock_llm.return_value = mock_llm_service
 
                     with patch("meetcap.cli.save_summary") as mock_save_summary:
-                        orchestrator._process_recording(
-                            audio_file,
-                            stt_engine="fwhisper",
-                            llm_path="/path/to/model.gguf",
-                            seed=None,
-                        )
+                        # Also patch extract_meeting_title
+                        with patch("meetcap.cli.extract_meeting_title") as mock_extract:
+                            mock_extract.return_value = "TestMeeting"
+                            orchestrator._process_recording(
+                                recording_dir,
+                                stt_engine="fwhisper",
+                                llm_path="/path/to/model.gguf",
+                                seed=None,
+                            )
 
                         mock_llm_service.summarize.assert_called_once()
                         mock_save_summary.assert_called_once()
@@ -489,8 +506,8 @@ class TestCLICommands:
                 patch("subprocess.run", return_value=Mock(returncode=0)),
                 patch("platform.processor", return_value="arm"),
                 patch(
-                    "typer.prompt", side_effect=["1", "1", "2", "1"]
-                ),  # User choices: engine, whisper model, context size, llm model
+                    "typer.prompt", side_effect=["1", "1", "2", "~/Recordings/meetcap", "1"]
+                ),  # User choices: engine, whisper model, context size, output dir, llm model
                 patch("typer.confirm", return_value=True),
                 patch("time.sleep"),  # Mock time.sleep
                 patch("threading.Event.wait", return_value=False),  # Mock hotkey timeout
