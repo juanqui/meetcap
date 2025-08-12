@@ -28,11 +28,15 @@ class Config:
             "stop": "<cmd>+<shift>+s",
         },
         "models": {
-            "stt_engine": "faster-whisper",  # stt engine: faster-whisper or mlx-whisper
+            "stt_engine": "faster-whisper",  # stt engine: faster-whisper, mlx-whisper, or vosk
             "stt_model_name": "large-v3",  # whisper model name for auto-download
             "stt_model_path": "~/.meetcap/models/whisper-large-v3",  # will be created automatically
             "mlx_stt_model_name": "mlx-community/whisper-large-v3-turbo",  # mlx whisper model
             "mlx_stt_model_path": "~/.meetcap/models/mlx-whisper",  # mlx models directory
+            "vosk_model_name": "vosk-model-en-us-0.22",  # vosk model name
+            "vosk_model_path": "~/.meetcap/models/vosk/vosk-model-en-us-0.22",  # vosk model directory
+            "vosk_spk_model_path": "~/.meetcap/models/vosk/vosk-model-spk-0.4",  # speaker model directory
+            "enable_speaker_diarization": False,  # enable speaker identification with vosk
             "llm_model_name": "Qwen3-4B-Thinking-2507-Q8_K_XL.gguf",  # qwen model name
             "llm_gguf_path": "~/.meetcap/models/Qwen3-4B-Thinking-2507-Q8_K_XL.gguf",  # auto-download path
         },
@@ -98,6 +102,10 @@ class Config:
             "MEETCAP_HOTKEY": ("hotkey", "stop"),
             "MEETCAP_STT_ENGINE": ("models", "stt_engine"),
             "MEETCAP_STT_MODEL": ("models", "stt_model_path"),
+            "MEETCAP_VOSK_MODEL": ("models", "vosk_model_name"),
+            "MEETCAP_VOSK_MODEL_PATH": ("models", "vosk_model_path"),
+            "MEETCAP_VOSK_SPK_MODEL": ("models", "vosk_spk_model_path"),
+            "MEETCAP_ENABLE_DIARIZATION": ("models", "enable_speaker_diarization", bool),
             "MEETCAP_MLX_STT_MODEL": ("models", "mlx_stt_model_name"),
             "MEETCAP_LLM_MODEL": ("models", "llm_gguf_path"),
             "MEETCAP_OUT_DIR": ("paths", "out_dir"),

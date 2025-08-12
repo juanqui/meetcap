@@ -82,6 +82,7 @@ class SummarizationService:
         transcript_text: str,
         meeting_title: str | None = None,
         attendees: list[str] | None = None,
+        has_speaker_info: bool = False,
     ) -> str:
         """
         generate meeting summary from transcript.
@@ -90,6 +91,7 @@ class SummarizationService:
             transcript_text: full transcript text
             meeting_title: optional meeting title
             attendees: optional list of attendees
+            has_speaker_info: whether transcript includes speaker labels
 
         returns:
             markdown-formatted summary
@@ -101,42 +103,88 @@ class SummarizationService:
         start_time = time.time()
 
         # prepare prompt for detailed summary
-        system_prompt = (
-            "you are an expert meeting note-taker who creates comprehensive, actionable meeting summaries. "
-            "analyze the transcript and produce detailed notes with these exact sections:\n\n"
-            "## Meeting Title\n"
-            "generate a concise title (2-4 words) that captures the main topic of the meeting.\n"
-            "the title should be in PascalCase with no spaces (e.g., 'ProductRoadmap', 'TeamRetrospective').\n"
-            "write only the title on a single line, nothing else in this section.\n\n"
-            "## Summary\n"
-            "provide a comprehensive 3-5 paragraph summary covering:\n"
-            "- main topics discussed and context\n"
-            "- key points raised by participants\n"
-            "- important details, data, or examples mentioned\n"
-            "- overall meeting outcome and next steps\n\n"
-            "## Key Discussion Points\n"
-            "list 5-10 bullet points of the most important topics discussed:\n"
-            "- include specific details and context for each point\n"
-            "- note any disagreements or alternative viewpoints\n"
-            "- highlight critical information or insights shared\n\n"
-            "## Decisions\n"
-            "list all decisions made during the meeting:\n"
-            "- be specific about what was decided\n"
-            "- include rationale if discussed\n"
-            "- note who made or supported the decision\n"
-            "- if no decisions were made, write 'no formal decisions made'\n\n"
-            "## Action Items\n"
-            "list all tasks and follow-ups mentioned:\n"
-            "- format: - [ ] owner — detailed task description (due: yyyy-mm-dd)\n"
-            "- if no owner mentioned, use 'tbd' as owner\n"
-            "- if no date mentioned, use 'tbd' for date\n"
-            "- include context for why each action is needed\n"
-            "- if no action items, write 'no action items identified'\n\n"
-            "## Notable Quotes\n"
-            "include 2-3 important verbatim quotes that capture key insights or decisions\n\n"
-            "be thorough and detailed while maintaining clarity. "
-            "do not include any thinking tags or meta-commentary."
-        )
+        if has_speaker_info:
+            # enhanced prompt when speaker information is available
+            system_prompt = (
+                "you are an expert meeting note-taker who creates comprehensive, actionable meeting summaries. "
+                "the transcript includes speaker labels (e.g., [Speaker 1], [Speaker 2]). "
+                "analyze the transcript and produce detailed notes with these exact sections:\n\n"
+                "## Meeting Title\n"
+                "generate a concise title (2-4 words) that captures the main topic of the meeting.\n"
+                "the title should be in PascalCase with no spaces (e.g., 'ProductRoadmap', 'TeamRetrospective').\n"
+                "write only the title on a single line, nothing else in this section.\n\n"
+                "## Participants\n"
+                "list the speakers identified in the transcript:\n"
+                "- note their key contributions or roles in the discussion\n"
+                "- identify who led the meeting if apparent\n\n"
+                "## Summary\n"
+                "provide a comprehensive 3-5 paragraph summary covering:\n"
+                "- main topics discussed and context\n"
+                "- key points raised by specific speakers\n"
+                "- important details, data, or examples mentioned\n"
+                "- overall meeting outcome and next steps\n\n"
+                "## Key Discussion Points\n"
+                "list 5-10 bullet points of the most important topics discussed:\n"
+                "- include specific details and context for each point\n"
+                "- attribute key points to specific speakers when relevant\n"
+                "- note any disagreements or alternative viewpoints between speakers\n"
+                "- highlight critical information or insights shared\n\n"
+                "## Decisions\n"
+                "list all decisions made during the meeting:\n"
+                "- be specific about what was decided\n"
+                "- include rationale if discussed\n"
+                "- note which speaker made or supported the decision\n"
+                "- if no decisions were made, write 'no formal decisions made'\n\n"
+                "## Action Items\n"
+                "list all tasks and follow-ups mentioned:\n"
+                "- format: - [ ] owner (Speaker X) — detailed task description (due: yyyy-mm-dd)\n"
+                "- if no owner mentioned, use 'tbd' as owner\n"
+                "- if no date mentioned, use 'tbd' for date\n"
+                "- include context for why each action is needed\n"
+                "- if no action items, write 'no action items identified'\n\n"
+                "## Notable Quotes\n"
+                "include 2-3 important verbatim quotes with speaker attribution\n\n"
+                "be thorough and detailed while maintaining clarity. "
+                "do not include any thinking tags or meta-commentary."
+            )
+        else:
+            # standard prompt without speaker information
+            system_prompt = (
+                "you are an expert meeting note-taker who creates comprehensive, actionable meeting summaries. "
+                "analyze the transcript and produce detailed notes with these exact sections:\n\n"
+                "## Meeting Title\n"
+                "generate a concise title (2-4 words) that captures the main topic of the meeting.\n"
+                "the title should be in PascalCase with no spaces (e.g., 'ProductRoadmap', 'TeamRetrospective').\n"
+                "write only the title on a single line, nothing else in this section.\n\n"
+                "## Summary\n"
+                "provide a comprehensive 3-5 paragraph summary covering:\n"
+                "- main topics discussed and context\n"
+                "- key points raised by participants\n"
+                "- important details, data, or examples mentioned\n"
+                "- overall meeting outcome and next steps\n\n"
+                "## Key Discussion Points\n"
+                "list 5-10 bullet points of the most important topics discussed:\n"
+                "- include specific details and context for each point\n"
+                "- note any disagreements or alternative viewpoints\n"
+                "- highlight critical information or insights shared\n\n"
+                "## Decisions\n"
+                "list all decisions made during the meeting:\n"
+                "- be specific about what was decided\n"
+                "- include rationale if discussed\n"
+                "- note who made or supported the decision\n"
+                "- if no decisions were made, write 'no formal decisions made'\n\n"
+                "## Action Items\n"
+                "list all tasks and follow-ups mentioned:\n"
+                "- format: - [ ] owner — detailed task description (due: yyyy-mm-dd)\n"
+                "- if no owner mentioned, use 'tbd' as owner\n"
+                "- if no date mentioned, use 'tbd' for date\n"
+                "- include context for why each action is needed\n"
+                "- if no action items, write 'no action items identified'\n\n"
+                "## Notable Quotes\n"
+                "include 2-3 important verbatim quotes that capture key insights or decisions\n\n"
+                "be thorough and detailed while maintaining clarity. "
+                "do not include any thinking tags or meta-commentary."
+            )
 
         # build user prompt
         user_prompt_parts = []

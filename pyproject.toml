@@ -61,6 +61,11 @@ stt = [
 mlx-stt = [
     "mlx-whisper>=0.4.2",
 ]
+vosk-stt = [
+    "vosk>=0.3.44",
+    "soundfile>=0.13.1",
+    "scikit-learn>=1.3.0",  # for speaker clustering
+]
 
 [tool.hatch.envs.default]
 dependencies = [

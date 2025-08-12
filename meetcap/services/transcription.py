@@ -20,6 +20,8 @@ class TranscriptSegment:
     start: float
     end: float
     text: str
+    speaker_id: int | None = None  # speaker identifier for diarization
+    confidence: float | None = None  # recognition confidence score
 
 
 @dataclass
@@ -32,6 +34,8 @@ class TranscriptResult:
     segments: list[TranscriptSegment]
     duration: float
     stt: dict  # engine info
+    speakers: list[dict] | None = None  # speaker metadata for diarization
+    diarization_enabled: bool = False  # flag indicating if diarization was used
 
 
 class TranscriptionService:
@@ -549,6 +553,350 @@ class MlxWhisperService(TranscriptionService):
         )
 
 
+class VoskTranscriptionService(TranscriptionService):
+    """transcription using vosk with speaker diarization support"""
+
+    def __init__(
+        self,
+        model_path: str,
+        spk_model_path: str | None = None,
+        sample_rate: int = 48000,
+        enable_diarization: bool = False,
+    ):
+        """
+        initialize vosk service.
+
+        args:
+            model_path: path to vosk model directory
+            spk_model_path: path to speaker model directory (optional)
+            sample_rate: expected audio sample rate
+            enable_diarization: enable speaker identification
+        """
+        self.model_path = Path(model_path).expanduser()
+        self.spk_model_path = Path(spk_model_path).expanduser() if spk_model_path else None
+        self.sample_rate = sample_rate
+        self.enable_diarization = enable_diarization and spk_model_path is not None
+        self.model = None
+        self.spk_model = None
+
+    def _load_model(self):
+        """lazy load the vosk model on first use."""
+        if self.model is not None:
+            return
+
+        try:
+            import vosk
+        except ImportError as e:
+            raise ImportError("vosk not installed. install with: pip install vosk") from e
+
+        if not self.model_path.exists():
+            raise FileNotFoundError(f"vosk model not found: {self.model_path}")
+
+        console.print(f"[cyan]loading vosk model from {self.model_path.name}...[/cyan]")
+
+        try:
+            # set log level to warnings only
+            vosk.SetLogLevel(-1)
+
+            # load main recognition model
+            self.model = vosk.Model(str(self.model_path))
+            console.print("[green]✓[/green] vosk model loaded")
+
+            # load speaker model if diarization enabled
+            if self.enable_diarization and self.spk_model_path:
+                if self.spk_model_path.exists():
+                    console.print(
+                        f"[cyan]loading speaker model from {self.spk_model_path.name}...[/cyan]"
+                    )
+                    self.spk_model = vosk.SpkModel(str(self.spk_model_path))
+                    console.print("[green]✓[/green] speaker model loaded")
+                else:
+                    console.print(
+                        "[yellow]warning: speaker model not found, diarization disabled[/yellow]"
+                    )
+                    self.enable_diarization = False
+
+        except Exception as e:
+            raise RuntimeError(f"failed to load vosk model: {e}") from e
+
+    def transcribe(self, audio_path: Path) -> TranscriptResult:
+        """
+        transcribe audio file using vosk.
+
+        args:
+            audio_path: path to audio file
+
+        returns:
+            transcription result with segments and optional speaker info
+        """
+        if not audio_path.exists():
+            raise FileNotFoundError(f"audio file not found: {audio_path}")
+
+        # load model if needed
+        self._load_model()
+
+        console.print(f"[cyan]transcribing {audio_path.name} with vosk...[/cyan]")
+        start_time = time.time()
+
+        try:
+            import tempfile
+
+            import soundfile as sf
+            import vosk
+
+            # check if we need to convert the audio format
+            # vosk (via soundfile) only supports WAV, FLAC, OGG, etc. - not M4A/MP4
+            supported_extensions = {".wav", ".flac", ".ogg", ".opus", ".raw"}
+            needs_conversion = audio_path.suffix.lower() not in supported_extensions
+
+            audio_to_process = audio_path
+            temp_wav_file = None
+
+            if needs_conversion:
+                console.print(f"[yellow]converting {audio_path.suffix} to WAV for vosk...[/yellow]")
+
+                # create a temporary WAV file
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+                    temp_wav_file = Path(temp_file.name)
+
+                # convert using ffmpeg
+                try:
+                    cmd = [
+                        "ffmpeg",
+                        "-i",
+                        str(audio_path),
+                        "-ac",
+                        "1",  # mono
+                        "-ar",
+                        str(self.sample_rate),  # resample to expected rate
+                        "-f",
+                        "wav",
+                        "-y",  # overwrite
+                        str(temp_wav_file),
+                    ]
+
+                    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+
+                    audio_to_process = temp_wav_file
+                    console.print("[green]✓[/green] audio converted to WAV")
+
+                except subprocess.CalledProcessError as e:
+                    if temp_wav_file and temp_wav_file.exists():
+                        temp_wav_file.unlink()
+                    raise RuntimeError(f"ffmpeg conversion failed: {e.stderr}") from e
+
+            # read audio file
+            audio_data, file_sample_rate = sf.read(str(audio_to_process))
+
+            # handle stereo to mono conversion if needed
+            if len(audio_data.shape) > 1:
+                audio_data = audio_data.mean(axis=1)
+
+            # convert to int16 for vosk
+            import numpy as np
+
+            audio_int16 = (audio_data * 32767).astype(np.int16)
+
+            # create recognizer
+            rec = vosk.KaldiRecognizer(self.model, file_sample_rate)
+            rec.SetWords(True)  # enable word-level timestamps
+
+            # enable speaker diarization if available
+            if self.enable_diarization and self.spk_model:
+                rec.SetSpkModel(self.spk_model)
+
+            # process audio in chunks
+            chunk_size = 4000  # samples per chunk
+            segments_list = []
+            speaker_embeddings = []
+            chunk_results = []  # store intermediate results with speaker vectors
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+                transient=True,
+            ) as progress:
+                task = progress.add_task("processing audio...", total=len(audio_int16))
+
+                for i in range(0, len(audio_int16), chunk_size):
+                    chunk = audio_int16[i : i + chunk_size]
+                    if rec.AcceptWaveform(chunk.tobytes()):
+                        # got a complete result for this chunk
+                        result = json.loads(rec.Result())
+                        if result:
+                            chunk_results.append(result)
+                            # collect speaker embedding if present
+                            if self.enable_diarization and "spk" in result:
+                                speaker_embeddings.append(result["spk"])
+                    progress.update(task, completed=min(i + chunk_size, len(audio_int16)))
+
+                # get final result
+                final_result = json.loads(rec.FinalResult())
+                if final_result:
+                    chunk_results.append(final_result)
+                    if self.enable_diarization and "spk" in final_result:
+                        speaker_embeddings.append(final_result["spk"])
+
+            # process all results into segments with speaker assignment
+            all_words = []
+            chunk_to_spk_id = {}  # map chunk index to speaker ID
+
+            # extract all words from all chunks
+            for chunk_idx, result in enumerate(chunk_results):
+                if "result" in result:
+                    for word_info in result["result"]:
+                        word_info["chunk_idx"] = chunk_idx
+                        all_words.append(word_info)
+
+            # cluster speaker embeddings if we have them
+            if self.enable_diarization and speaker_embeddings:
+                try:
+                    # perform speaker clustering
+                    from sklearn.cluster import AgglomerativeClustering
+                    from sklearn.preprocessing import normalize
+
+                    # convert to numpy array and normalize
+                    X = np.array(speaker_embeddings, dtype=np.float32)
+                    Xn = normalize(X, norm="l2")
+
+                    # estimate number of speakers (2-4 typical for meetings)
+                    # could be made configurable
+                    n_speakers = min(4, max(2, len(speaker_embeddings) // 10))
+
+                    # cluster using cosine distance
+                    clustering = AgglomerativeClustering(
+                        n_clusters=n_speakers, metric="cosine", linkage="average"
+                    )
+                    labels = clustering.fit_predict(Xn)
+
+                    # map chunk indices to speaker IDs
+                    for chunk_idx, spk_id in enumerate(labels):
+                        chunk_to_spk_id[chunk_idx] = int(spk_id)
+
+                    console.print(f"[dim]identified {n_speakers} speakers[/dim]")
+
+                except ImportError:
+                    console.print(
+                        "[yellow]scikit-learn not installed, speaker clustering disabled[/yellow]"
+                    )
+                    self.enable_diarization = False
+                except Exception as e:
+                    console.print(f"[yellow]speaker clustering failed: {e}[/yellow]")
+                    self.enable_diarization = False
+
+            # group words into segments with speaker IDs
+            for word_info in all_words:
+                # determine speaker ID for this word
+                speaker_id = None
+                if self.enable_diarization and word_info["chunk_idx"] in chunk_to_spk_id:
+                    speaker_id = chunk_to_spk_id[word_info["chunk_idx"]]
+
+                # group words into segments by pauses
+                if not segments_list or (word_info["start"] - segments_list[-1].end > 0.5):
+                    # new segment
+                    segment = TranscriptSegment(
+                        id=len(segments_list),
+                        start=word_info["start"],
+                        end=word_info["end"],
+                        text=word_info["word"],
+                        confidence=word_info.get("conf", 1.0),
+                        speaker_id=speaker_id,
+                    )
+                    segments_list.append(segment)
+                else:
+                    # append to current segment (keep same speaker)
+                    segments_list[-1].text += " " + word_info["word"]
+                    segments_list[-1].end = word_info["end"]
+                    # update speaker if different (shouldn't happen within same segment)
+                    if segments_list[-1].speaker_id != speaker_id:
+                        # actually start a new segment for speaker change
+                        segment = TranscriptSegment(
+                            id=len(segments_list),
+                            start=word_info["start"],
+                            end=word_info["end"],
+                            text=word_info["word"],
+                            confidence=word_info.get("conf", 1.0),
+                            speaker_id=speaker_id,
+                        )
+                        segments_list.append(segment)
+
+            # extract speaker info if available
+            speakers = None
+            if self.enable_diarization and chunk_to_spk_id:
+                # create speaker metadata
+                unique_speakers = set(chunk_to_spk_id.values())
+                speakers = [
+                    {"id": spk_id, "label": f"Speaker {spk_id + 1}"} for spk_id in unique_speakers
+                ]
+                console.print(
+                    f"[dim]speaker diarization complete: {len(unique_speakers)} speakers[/dim]"
+                )
+
+        except ImportError as e:
+            # clean up temp file if created
+            if temp_wav_file and temp_wav_file.exists():
+                temp_wav_file.unlink()
+
+            console.print(f"[red]vosk dependencies missing: {e}[/red]")
+            console.print("[yellow]falling back to faster-whisper...[/yellow]")
+            # fallback to whisper
+            fallback_service = FasterWhisperService(
+                model_name="large-v3",
+                auto_download=True,
+            )
+            return fallback_service.transcribe(audio_path)
+
+        except Exception as e:
+            # clean up temp file if created
+            if temp_wav_file and temp_wav_file.exists():
+                temp_wav_file.unlink()
+
+            console.print(f"[red]vosk transcription failed: {e}[/red]")
+            console.print("[yellow]falling back to faster-whisper...[/yellow]")
+            # fallback to whisper
+            fallback_service = FasterWhisperService(
+                model_name="large-v3",
+                auto_download=True,
+            )
+            return fallback_service.transcribe(audio_path)
+
+        finally:
+            # always clean up temp file if created
+            if temp_wav_file and temp_wav_file.exists():
+                try:
+                    temp_wav_file.unlink()
+                except OSError:
+                    pass  # ignore cleanup errors
+
+        # calculate duration
+        duration = time.time() - start_time
+        audio_duration = segments_list[-1].end if segments_list else 0.0
+
+        console.print(
+            f"[green]✓[/green] vosk transcription complete: "
+            f"{len(segments_list)} segments in {duration:.1f}s "
+            f"(speed: {audio_duration / duration:.1f}x)"
+            if audio_duration > 0
+            else ""
+        )
+
+        return TranscriptResult(
+            audio_path=str(audio_path),
+            sample_rate=file_sample_rate,
+            language="en",  # vosk models are language-specific
+            segments=segments_list,
+            duration=audio_duration,
+            stt={
+                "engine": "vosk",
+                "model_path": str(self.model_path),
+                "diarization": self.enable_diarization,
+            },
+            speakers=speakers,
+            diarization_enabled=self.enable_diarization,
+        )
+
+
 def save_transcript(result: TranscriptResult, base_path: Path) -> tuple[Path, Path]:
     """
     save transcript to text and json files.
@@ -560,13 +908,16 @@ def save_transcript(result: TranscriptResult, base_path: Path) -> tuple[Path, Pa
     returns:
         tuple of (text_path, json_path)
     """
-    # save plain text
+    # save plain text with speaker labels if available
     text_path = base_path.with_suffix(".transcript.txt")
     with open(text_path, "w", encoding="utf-8") as f:
         for segment in result.segments:
-            f.write(f"{segment.text}\n")
+            if segment.speaker_id is not None:
+                f.write(f"[Speaker {segment.speaker_id}]: {segment.text}\n")
+            else:
+                f.write(f"{segment.text}\n")
 
-    # save json with timestamps
+    # save json with timestamps and speaker info
     json_path = base_path.with_suffix(".transcript.json")
     json_data = {
         "audio_path": result.audio_path,
@@ -576,6 +927,12 @@ def save_transcript(result: TranscriptResult, base_path: Path) -> tuple[Path, Pa
         "duration": result.duration,
         "stt": result.stt,
     }
+
+    # add speaker info if available
+    if result.speakers:
+        json_data["speakers"] = result.speakers
+    if result.diarization_enabled:
+        json_data["diarization_enabled"] = result.diarization_enabled
 
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(json_data, f, indent=2, ensure_ascii=False)

@@ -39,9 +39,11 @@ meetcap/
 ### Transcription
 - Primary (Apple Silicon): mlx-whisper with MLX acceleration
 - Fallback: faster-whisper with Metal acceleration
-- Alternative: whisper.cpp CLI
+- Alternative: vosk with speaker diarization support
+- Backup: whisper.cpp CLI
 - Outputs both plain text and JSON with timestamps
 - Automatic fallback from mlx-whisper to faster-whisper on errors
+- Vosk provides speaker identification for enhanced summaries
 
 ### Summarization
 - Qwen3-4B-Thinking model via llama-cpp-python
@@ -62,8 +64,10 @@ hatch env create
 # Run CLI commands
 hatch run meetcap record                    # Record from audio device
 hatch run meetcap record --stt mlx          # Record with mlx-whisper (Apple Silicon)
+hatch run meetcap record --stt vosk         # Record with Vosk (speaker identification)
 hatch run meetcap summarize                 # Process existing audio file
 hatch run meetcap summarize --stt mlx       # Process with mlx-whisper
+hatch run meetcap summarize --stt vosk      # Process with Vosk
 hatch run meetcap reprocess                 # Reprocess a recording with different models
 hatch run meetcap reprocess --mode summary  # Reprocess only the summary
 hatch run meetcap devices                   # List audio devices
@@ -164,6 +168,12 @@ Models are selected and downloaded during `meetcap setup`:
 2. **large-v3-turbo** (~1.5GB) - Faster than v3, slightly less accurate
 3. **small** (~466MB) - Fast, good for quick transcripts
 
+**Vosk Models (with speaker identification):**
+1. **vosk-model-small-en-us-0.15** (~507MB) - Fast, lower accuracy
+2. **vosk-model-en-us-0.22** (default, ~1.8GB) - Balanced performance
+3. **vosk-model-en-us-0.42-gigaspeech** (~3.3GB) - Best accuracy
+4. **vosk-model-spk-0.4** (~13MB) - Speaker identification model (automatic with Vosk)
+
 ### LLM Models (Summarization)
 1. **Qwen3-4B-Thinking** (default, ~4-5GB) - Best for meeting summaries, removes thinking tags
 2. **Qwen3-4B-Instruct** (~4-5GB) - General purpose, follows instructions
@@ -171,9 +181,11 @@ Models are selected and downloaded during `meetcap setup`:
 
 All models stored in: `~/.meetcap/models/`
 Can override with environment variables:
-- `MEETCAP_STT_ENGINE` - Choose stt engine (faster-whisper or mlx-whisper)
+- `MEETCAP_STT_ENGINE` - Choose stt engine (faster-whisper, mlx-whisper, or vosk)
 - `MEETCAP_STT_MODEL` - Faster-whisper model name
 - `MEETCAP_MLX_STT_MODEL` - MLX-whisper model name
+- `MEETCAP_VOSK_MODEL` - Vosk model name
+- `MEETCAP_ENABLE_DIARIZATION` - Enable speaker identification (true/false)
 - `MEETCAP_LLM_MODEL` - Path to GGUF file
 
 ## Troubleshooting

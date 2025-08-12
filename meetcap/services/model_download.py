@@ -1,6 +1,7 @@
 """model download utilities for meetcap"""
 
 import urllib.request
+import zipfile
 from pathlib import Path
 
 from rich.console import Console
@@ -479,3 +480,268 @@ def verify_qwen_model(
     else:
         console.print("[yellow]⚠[/yellow] Qwen model not found")
         return False
+
+
+def ensure_vosk_model(
+    model_name: str = "vosk-model-en-us-0.22",
+    models_dir: Path | None = None,
+    force_download: bool = False,
+) -> Path | None:
+    """
+    ensure vosk model is available, downloading if necessary.
+
+    args:
+        model_name: name of vosk model (e.g., 'vosk-model-en-us-0.22')
+        models_dir: directory to store models (default: ~/.meetcap/models/vosk)
+        force_download: force re-download even if exists
+
+    returns:
+        path to model directory or None if failed
+    """
+    if models_dir is None:
+        models_dir = Path.home() / ".meetcap" / "models" / "vosk"
+
+    models_dir = models_dir.expanduser()
+    models_dir.mkdir(parents=True, exist_ok=True)
+
+    # vosk model URLs
+    model_urls = {
+        "vosk-model-small-en-us-0.15": {
+            "url": "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
+            "size": "~507MB",
+        },
+        "vosk-model-en-us-0.22": {
+            "url": "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22.zip",
+            "size": "~1.8GB",
+        },
+        "vosk-model-en-us-0.42-gigaspeech": {
+            "url": "https://alphacephei.com/vosk/models/vosk-model-en-us-0.42-gigaspeech.zip",
+            "size": "~3.3GB",
+        },
+    }
+
+    if model_name not in model_urls:
+        console.print(f"[red]error:[/red] unknown vosk model: {model_name}")
+        console.print(f"[yellow]available models:[/yellow] {', '.join(model_urls.keys())}")
+        return None
+
+    model_info = model_urls[model_name]
+    model_path = models_dir / model_name
+
+    # check if model already exists
+    if model_path.exists() and not force_download:
+        # verify it has required files
+        if (model_path / "conf" / "model.conf").exists():
+            console.print(f"[green]✓[/green] vosk model already exists: {model_path}")
+            return model_path
+
+    console.print(f"[cyan]downloading vosk model '{model_name}'...[/cyan]")
+    console.print(f"[dim]size: {model_info['size']}[/dim]")
+    console.print("[yellow]this may take several minutes depending on your connection[/yellow]")
+
+    try:
+        # download zip file
+        zip_path = models_dir / f"{model_name}.zip"
+        temp_zip = zip_path.with_suffix(".tmp")
+
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            DownloadColumn(),
+            TimeRemainingColumn(),
+            console=console,
+            transient=False,
+        ) as progress:
+            with urllib.request.urlopen(model_info["url"]) as response:
+                total_size = int(response.headers.get("Content-Length", 0))
+                task = progress.add_task(
+                    f"downloading {model_name}", total=total_size if total_size > 0 else None
+                )
+
+                chunk_size = 8192 * 16  # 128KB chunks
+                downloaded = 0
+
+                with open(temp_zip, "wb") as f:
+                    while True:
+                        chunk = response.read(chunk_size)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        progress.update(task, completed=downloaded)
+
+        # rename temp file
+        temp_zip.rename(zip_path)
+
+        console.print("[cyan]extracting model archive...[/cyan]")
+
+        # extract zip file
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+            zip_ref.extractall(models_dir)
+
+        # remove zip file to save space
+        zip_path.unlink()
+
+        # verify extraction
+        if model_path.exists() and (model_path / "conf" / "model.conf").exists():
+            console.print(f"[green]✓[/green] vosk model ready: {model_path}")
+            return model_path
+        else:
+            console.print("[red]error:[/red] model extraction failed - missing required files")
+            return None
+
+    except Exception as e:
+        console.print(f"[red]error downloading vosk model:[/red] {e}")
+        # cleanup partial downloads
+        if temp_zip.exists():
+            temp_zip.unlink()
+        if zip_path.exists():
+            zip_path.unlink()
+        return None
+
+
+def ensure_vosk_spk_model(
+    models_dir: Path | None = None,
+    force_download: bool = False,
+) -> Path | None:
+    """
+    ensure vosk speaker model is available, downloading if necessary.
+
+    args:
+        models_dir: directory to store models (default: ~/.meetcap/models/vosk)
+        force_download: force re-download even if exists
+
+    returns:
+        path to speaker model directory or None if failed
+    """
+    if models_dir is None:
+        models_dir = Path.home() / ".meetcap" / "models" / "vosk"
+
+    models_dir = models_dir.expanduser()
+    models_dir.mkdir(parents=True, exist_ok=True)
+
+    model_name = "vosk-model-spk-0.4"
+    model_url = "https://alphacephei.com/vosk/models/vosk-model-spk-0.4.zip"
+    model_path = models_dir / model_name
+
+    # check if model already exists
+    if model_path.exists() and not force_download:
+        # verify it has required files
+        if (model_path / "model" / "final.raw").exists():
+            console.print(f"[green]✓[/green] vosk speaker model already exists: {model_path}")
+            return model_path
+
+    console.print("[cyan]downloading vosk speaker model...[/cyan]")
+    console.print("[dim]size: ~13MB[/dim]")
+
+    try:
+        # download zip file
+        zip_path = models_dir / f"{model_name}.zip"
+        temp_zip = zip_path.with_suffix(".tmp")
+
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            DownloadColumn(),
+            TimeRemainingColumn(),
+            console=console,
+            transient=False,
+        ) as progress:
+            with urllib.request.urlopen(model_url) as response:
+                total_size = int(response.headers.get("Content-Length", 0))
+                task = progress.add_task(
+                    "downloading speaker model", total=total_size if total_size > 0 else None
+                )
+
+                chunk_size = 8192 * 16  # 128KB chunks
+                downloaded = 0
+
+                with open(temp_zip, "wb") as f:
+                    while True:
+                        chunk = response.read(chunk_size)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        progress.update(task, completed=downloaded)
+
+        # rename temp file
+        temp_zip.rename(zip_path)
+
+        console.print("[cyan]extracting speaker model archive...[/cyan]")
+
+        # extract zip file
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+            zip_ref.extractall(models_dir)
+
+        # remove zip file to save space
+        zip_path.unlink()
+
+        # verify extraction
+        if model_path.exists() and (model_path / "model" / "final.raw").exists():
+            console.print(f"[green]✓[/green] speaker model ready: {model_path}")
+            return model_path
+        else:
+            console.print(
+                "[red]error:[/red] speaker model extraction failed - missing required files"
+            )
+            return None
+
+    except Exception as e:
+        console.print(f"[red]error downloading speaker model:[/red] {e}")
+        # cleanup partial downloads
+        if temp_zip.exists():
+            temp_zip.unlink()
+        if zip_path.exists():
+            zip_path.unlink()
+        return None
+
+
+def verify_vosk_model(
+    model_name: str = "vosk-model-en-us-0.22",
+    models_dir: Path | None = None,
+) -> bool:
+    """
+    verify vosk model is available for use.
+
+    args:
+        model_name: name of vosk model
+        models_dir: directory where models are stored
+
+    returns:
+        true if model is available
+    """
+    if models_dir is None:
+        models_dir = Path.home() / ".meetcap" / "models" / "vosk"
+
+    models_dir = models_dir.expanduser()
+
+    # check if vosk is installed
+    import importlib.util
+
+    if importlib.util.find_spec("vosk") is None:
+        console.print("[yellow]⚠[/yellow] vosk not installed")
+        return False
+
+    # check if model directory exists
+    model_path = models_dir / model_name
+
+    if not model_path.exists():
+        console.print(f"[yellow]⚠[/yellow] vosk model not found: {model_name}")
+        return False
+
+    # check for required files
+    required_files = [
+        model_path / "conf" / "model.conf",
+        model_path / "am" / "final.mdl",
+    ]
+
+    for file_path in required_files:
+        if not file_path.exists():
+            console.print(
+                f"[yellow]⚠[/yellow] missing required file: {file_path.relative_to(model_path)}"
+            )
+            return False
+
+    console.print(f"[green]✓[/green] vosk model '{model_name}' is ready")
+    return True

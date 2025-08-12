@@ -24,15 +24,19 @@ from meetcap.core.recorder import AudioRecorder
 from meetcap.services.model_download import (
     ensure_mlx_whisper_model,
     ensure_qwen_model,
+    ensure_vosk_model,
+    ensure_vosk_spk_model,
     ensure_whisper_model,
     verify_mlx_whisper_model,
     verify_qwen_model,
+    verify_vosk_model,
     verify_whisper_model,
 )
 from meetcap.services.summarization import SummarizationService, extract_meeting_title, save_summary
 from meetcap.services.transcription import (
     FasterWhisperService,
     MlxWhisperService,
+    VoskTranscriptionService,
     WhisperCppService,
     save_transcript,
 )
@@ -411,6 +415,17 @@ class RecordingOrchestrator:
                 model_path=str(mlx_model_path) if mlx_model_path.exists() else None,
                 auto_download=True,
             )
+        elif stt_engine == "vosk":
+            vosk_model_path = self.config.expand_path(self.config.get("models", "vosk_model_path"))
+            vosk_spk_model_path = self.config.expand_path(
+                self.config.get("models", "vosk_spk_model_path")
+            )
+            enable_diarization = self.config.get("models", "enable_speaker_diarization", False)
+            stt_service = VoskTranscriptionService(
+                model_path=str(vosk_model_path),
+                spk_model_path=str(vosk_spk_model_path) if vosk_spk_model_path.exists() else None,
+                enable_diarization=enable_diarization,
+            )
         else:
             # whisper.cpp
             stt_model_path = self.config.get("models", "stt_model_path")
@@ -482,7 +497,20 @@ class RecordingOrchestrator:
             with open(transcript_path, encoding="utf-8") as f:
                 transcript_text = f.read()
 
-            summary = llm_service.summarize(transcript_text)
+            # check if speaker information is available
+            has_speaker_info = False
+            json_path = base_path.with_suffix(".transcript.json")
+            if json_path.exists():
+                try:
+                    import json
+
+                    with open(json_path, encoding="utf-8") as f:
+                        transcript_data = json.load(f)
+                        has_speaker_info = transcript_data.get("diarization_enabled", False)
+                except Exception:
+                    pass  # ignore errors reading JSON
+
+            summary = llm_service.summarize(transcript_text, has_speaker_info=has_speaker_info)
             summary_path = save_summary(summary, base_path)
             return summary_path
         except Exception as e:
@@ -686,6 +714,8 @@ class RecordingOrchestrator:
                 actual_stt_engine = "fwhisper"
             elif config_stt == "mlx-whisper":
                 actual_stt_engine = "mlx"
+            elif config_stt == "vosk":
+                actual_stt_engine = "vosk"
             else:
                 actual_stt_engine = config_stt
 
@@ -702,6 +732,15 @@ class RecordingOrchestrator:
                 # shorten the display name for mlx models
                 short_name = model_name.split("/")[-1] if "/" in model_name else model_name
                 stt_display = f"mlx-whisper ({short_name})"
+            elif actual_stt_engine == "vosk":
+                model_name = self.config.get("models", "vosk_model_name", "vosk-model-en-us-0.22")
+                short_name = model_name.replace("vosk-model-", "")
+                diarization = (
+                    " + speakers"
+                    if self.config.get("models", "enable_speaker_diarization", False)
+                    else ""
+                )
+                stt_display = f"vosk ({short_name}{diarization})"
             else:
                 stt_display = "whisper.cpp"
 
@@ -859,7 +898,7 @@ def record(
     stt: str | None = typer.Option(
         None,
         "--stt",
-        help="stt engine: fwhisper, mlx, or whispercpp (defaults to config)",
+        help="stt engine: fwhisper, mlx, vosk, or whispercpp (defaults to config)",
     ),
     llm: str | None = typer.Option(
         None,
@@ -912,7 +951,7 @@ def summarize(
     stt: str | None = typer.Option(
         None,
         "--stt",
-        help="stt engine: fwhisper, mlx, or whispercpp (defaults to config)",
+        help="stt engine: fwhisper, mlx, vosk, or whispercpp (defaults to config)",
     ),
     llm: str | None = typer.Option(
         None,
@@ -1013,7 +1052,7 @@ def reprocess(
     stt: str | None = typer.Option(
         None,
         "--stt",
-        help="stt engine override: 'fwhisper', 'mlx', or 'whisper.cpp'",
+        help="stt engine override: 'fwhisper', 'mlx', 'vosk', or 'whisper.cpp'",
     ),
     llm: str | None = typer.Option(
         None,
@@ -1038,9 +1077,9 @@ def reprocess(
         raise typer.Exit(1)
 
     # validate stt engine if provided
-    if stt and stt not in ["fwhisper", "mlx", "whisper.cpp"]:
+    if stt and stt not in ["fwhisper", "mlx", "vosk", "whisper.cpp"]:
         console.print(f"[red]error: invalid stt engine '{stt}'[/red]")
-        console.print("[yellow]use --stt fwhisper, mlx, or whisper.cpp[/yellow]")
+        console.print("[yellow]use --stt fwhisper, mlx, vosk, or whisper.cpp[/yellow]")
         raise typer.Exit(1)
 
     # resolve recording path
@@ -1129,27 +1168,33 @@ def setup() -> None:
 
     # try a brief recording to trigger permission dialog
     console.print("[cyan]attempting test recording to verify permissions...[/cyan]")
-    recorder = AudioRecorder()
-    try:
-        test_path = recorder.start_recording(
-            device_index=devices[0].index,
-            device_name=devices[0].name,
-        )
-        time.sleep(2)  # record for 2 seconds
-        recorder.stop_recording()
 
-        # if we got here, permissions are granted
-        console.print("[green]✓[/green] microphone permission granted")
-        console.print(f"  detected {len(devices)} audio device(s)")
+    # use a temporary directory for the test recording
+    import tempfile
 
-        # clean up test file
-        if test_path.exists():
-            test_path.unlink()
-    except Exception as e:
-        console.print("[red]✗[/red] microphone permission denied or error")
-        console.print(f"  error: {e}")
-        console.print("[yellow]grant permission in system preferences and run setup again[/yellow]")
-        return
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        recorder = AudioRecorder(output_dir=temp_path)
+        try:
+            recorder.start_recording(
+                device_index=devices[0].index,
+                device_name=devices[0].name,
+            )
+            time.sleep(2)  # record for 2 seconds
+            recorder.stop_recording()
+
+            # if we got here, permissions are granted
+            console.print("[green]✓[/green] microphone permission granted")
+            console.print(f"  detected {len(devices)} audio device(s)")
+
+            # temp directory and contents will be automatically cleaned up
+        except Exception as e:
+            console.print("[red]✗[/red] microphone permission denied or error")
+            console.print(f"  error: {e}")
+            console.print(
+                "[yellow]grant permission in system preferences and run setup again[/yellow]"
+            )
+            return
 
     # step 3: test hotkey permission
     console.print("\n[bold]step 3: input monitoring permission (for hotkeys)[/bold]")
@@ -1176,8 +1221,8 @@ def setup() -> None:
 
     hotkey_mgr.stop()
 
-    # step 4: select and download whisper model
-    console.print("\n[bold]step 4: select whisper (speech-to-text) model[/bold]")
+    # step 4: select and download speech-to-text model
+    console.print("\n[bold]step 4: select speech-to-text (STT) engine[/bold]")
 
     # check if running on apple silicon
     import platform
@@ -1194,7 +1239,39 @@ def setup() -> None:
                 "name": "MLX Whisper (recommended for Apple Silicon)",
                 "default_model": "mlx-community/whisper-large-v3-turbo",
             },
-            {"key": "faster", "name": "Faster Whisper (compatible)", "default_model": "large-v3"},
+            {
+                "key": "faster",
+                "name": "Faster Whisper (universal compatibility)",
+                "default_model": "large-v3",
+            },
+            {
+                "key": "vosk",
+                "name": "Vosk (offline, with speaker identification)",
+                "default_model": "vosk-model-en-us-0.22",
+            },
+        ]
+
+        console.print("\n[cyan]available stt engines:[/cyan]")
+        for i, engine in enumerate(stt_engines, 1):
+            console.print(f"  {i}. [bold]{engine['name']}[/bold]")
+
+        engine_choice = typer.prompt("\nselect engine (1-3)", default="1")
+        try:
+            engine_idx = int(engine_choice) - 1
+            if 0 <= engine_idx < len(stt_engines):
+                selected_engine = stt_engines[engine_idx]
+            else:
+                selected_engine = stt_engines[0]
+        except ValueError:
+            selected_engine = stt_engines[0]
+    else:
+        stt_engines = [
+            {"key": "faster", "name": "Faster Whisper (recommended)", "default_model": "large-v3"},
+            {
+                "key": "vosk",
+                "name": "Vosk (offline, with speaker identification)",
+                "default_model": "vosk-model-en-us-0.22",
+            },
         ]
 
         console.print("\n[cyan]available stt engines:[/cyan]")
@@ -1210,12 +1287,80 @@ def setup() -> None:
                 selected_engine = stt_engines[0]
         except ValueError:
             selected_engine = stt_engines[0]
-    else:
-        selected_engine = {"key": "faster", "name": "Faster Whisper", "default_model": "large-v3"}
 
     console.print(f"\n[cyan]selected engine: {selected_engine['name']}[/cyan]")
 
-    if selected_engine["key"] == "mlx":
+    if selected_engine["key"] == "vosk":
+        # vosk models
+        vosk_models = [
+            {
+                "name": "vosk-model-small-en-us-0.15",
+                "desc": "Fast, lower accuracy",
+                "size": "~507MB",
+            },
+            {"name": "vosk-model-en-us-0.22", "desc": "Balanced (recommended)", "size": "~1.8GB"},
+            {"name": "vosk-model-en-us-0.42-gigaspeech", "desc": "Best accuracy", "size": "~3.3GB"},
+        ]
+
+        console.print("\n[cyan]available vosk models:[/cyan]")
+        for i, model in enumerate(vosk_models, 1):
+            console.print(
+                f"  {i}. [bold]{model['name'].replace('vosk-model-', '')}[/bold] - {model['desc']} ({model['size']})"
+            )
+
+        choice = typer.prompt("\nselect model (1-3)", default="2")
+        try:
+            model_idx = int(choice) - 1
+            if 0 <= model_idx < len(vosk_models):
+                vosk_model_name = vosk_models[model_idx]["name"]
+            else:
+                vosk_model_name = vosk_models[1]["name"]
+        except ValueError:
+            vosk_model_name = vosk_models[1]["name"]
+
+        console.print(f"\n[cyan]selected: {vosk_model_name.replace('vosk-model-', '')}[/cyan]")
+
+        # download vosk model if needed
+        if verify_vosk_model(vosk_model_name, models_dir / "vosk"):
+            console.print("[green]✓[/green] vosk model already installed")
+        else:
+            console.print("[cyan]downloading vosk model...[/cyan]")
+            model_path = ensure_vosk_model(vosk_model_name, models_dir / "vosk")
+
+            if model_path:
+                console.print("[green]✓[/green] vosk model ready")
+            else:
+                console.print("[red]✗[/red] vosk download failed")
+                console.print("[yellow]check your internet connection and try again[/yellow]")
+                return
+
+        # ask about speaker diarization
+        enable_diarization = typer.confirm(
+            "\nenable speaker identification (diarization)?", default=True
+        )
+
+        if enable_diarization:
+            console.print("[cyan]downloading speaker model...[/cyan]")
+            spk_model_path = ensure_vosk_spk_model(models_dir / "vosk")
+            if spk_model_path:
+                console.print("[green]✓[/green] speaker model ready")
+            else:
+                console.print(
+                    "[yellow]⚠ speaker model download failed, diarization will be disabled[/yellow]"
+                )
+                enable_diarization = False
+
+        # update config
+        config.config["models"]["stt_engine"] = "vosk"
+        config.config["models"]["vosk_model_name"] = vosk_model_name
+        config.config["models"]["vosk_model_path"] = str(models_dir / "vosk" / vosk_model_name)
+        config.config["models"]["vosk_spk_model_path"] = str(
+            models_dir / "vosk" / "vosk-model-spk-0.4"
+        )
+        config.config["models"]["enable_speaker_diarization"] = enable_diarization
+        config.save()
+
+    elif selected_engine["key"] == "mlx":
         # mlx-whisper models
         mlx_models = [
             {

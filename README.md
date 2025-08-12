@@ -48,6 +48,7 @@ Offline meeting recorder & summarizer for macOS
 
 4. **Models** (selected and downloaded during setup):
    - **Whisper models**: large-v3 (default), large-v3-turbo, or small
+   - **Vosk models** (with speaker identification): small (507MB), standard (1.8GB), or gigaspeech (3.3GB)
    - **LLM models**: Qwen3-4B-Thinking (default), Qwen3-4B-Instruct, or GPT-OSS-20B
 
 ### Install meetcap
@@ -60,6 +61,11 @@ pip install "meetcap[mlx-stt]"
 **Other platforms or Intel Macs:**
 ```bash
 pip install "meetcap[stt]"
+```
+
+**With Vosk for speaker identification:**
+```bash
+pip install "meetcap[vosk-stt]"
 ```
 
 **First-time setup:**
@@ -148,12 +154,41 @@ meetcap reprocess 2025_Jan_15_TeamStandup --mode stt
 
 Edit `~/.meetcap/config.toml` to customize:
 - Default audio device
+- STT engine selection (faster-whisper, mlx-whisper, vosk)
 - Model settings (defaults to auto-downloaded models)
 - LLM context size (16k, 32k, 64k, or 128k tokens)
 - Hotkey combinations
 - Output directories
 
 Models are automatically downloaded to `~/.meetcap/models/` on first use.
+
+#### STT Engine Options
+
+meetcap supports multiple speech-to-text engines:
+
+1. **Faster-Whisper** (default on Intel Macs):
+   - Best accuracy for general transcription
+   - Models: large-v3, large-v3-turbo, small
+   - Use: `--stt fwhisper`
+
+2. **MLX-Whisper** (default on Apple Silicon):
+   - Optimized for Apple Silicon performance
+   - Models: large-v3-turbo, large-v3-mlx, small-mlx
+   - Use: `--stt mlx`
+
+3. **Vosk** (speaker identification):
+   - Offline speech recognition with speaker diarization
+   - Identifies different speakers in the meeting
+   - Models: small (507MB), standard (1.8GB), gigaspeech (3.3GB)
+   - Use: `--stt vosk`
+   - Enable diarization in config:
+   ```toml
+   [models]
+   stt_engine = "vosk"
+   enable_speaker_diarization = true
+   ```
+
+Speaker identification improves summaries by attributing statements to specific speakers.
 
 #### Context Size Settings
 
