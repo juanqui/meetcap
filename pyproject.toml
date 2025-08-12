@@ -10,7 +10,7 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
-    { name = "Juan", email = "juan@example.com" }
+    { name = "Juan", email = "juanqui@villafam.com" }
 ]
 homepage = "https://github.com/juanqui/meetcap"
 repository = "https://github.com/juanqui/meetcap"
