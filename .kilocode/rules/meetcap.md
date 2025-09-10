@@ -217,14 +217,16 @@ This project uses `bump2version` to manage application versions. The configurati
 - Tag format: `v{new_version}`
 
 #### Version Bumping Commands
+**Important**: Always use `hatch run` prefix for version bumping to ensure proper environment activation.
+
 ```bash
 # Bump version (major, minor, or patch)
-bump2version major
-bump2version minor
-bump2version patch
+hatch run bump2version major
+hatch run bump2version minor
+hatch run bump2version patch
 
 # Bump version without committing/tagging (for testing)
-bump2version --no-commit major
+hatch run bump2version --no-commit major
 ```
 
 #### Version File Locations
