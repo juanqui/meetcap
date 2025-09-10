@@ -33,10 +33,16 @@ jobs:
       run: pip install --upgrade hatch
 
     - name: Run linting and formatting checks
+      env:
+        CMAKE_ARGS: "-DGGML_NO_ACCELERATE=ON -DGGML_NO_METAL=ON"
+        PIP_ONLY_BINARY: "llama-cpp-python"
       run: |
         hatch run lint
 
     - name: Test with pytest
+      env:
+        CMAKE_ARGS: "-DGGML_NO_ACCELERATE=ON -DGGML_NO_METAL=ON"
+        PIP_ONLY_BINARY: "llama-cpp-python"
       run: |
         hatch run test-cov
 
