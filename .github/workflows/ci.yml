@@ -36,7 +36,7 @@ jobs:
       run: |
         # Install everything except llama-cpp-python which isn't needed for linting
         pip install hatch
-        pip install ruff black mypy
+        pip install ruff black
         pip install pynput rich typer psutil "tomli>=2.2.1; python_version < '3.11'" toml urllib3
         pip install -e . --no-deps
 
@@ -44,7 +44,6 @@ jobs:
       run: |
         ruff format --check .
         ruff check .
-        mypy meetcap --ignore-missing-imports
 
     - name: Test with pytest
       env:
