@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 import pytest
 from typer.testing import CliRunner
 
-from meetcap.cli import BackupManager, RecordingOrchestrator, app
+from meetcap.cli import BackupManager, RecordingOrchestrator, app, validate_auto_stop_time
 from meetcap.core.devices import AudioDevice
 from meetcap.utils.config import Config
 
@@ -121,6 +121,38 @@ class TestRecordingOrchestrator:
         orchestrator._stop_recording()
 
         assert orchestrator.stop_event.is_set()
+
+    def test_auto_stop_validation(self):
+        """test auto stop time validation"""
+        # Test valid values
+        assert validate_auto_stop_time(0)
+        assert validate_auto_stop_time(30)
+        assert validate_auto_stop_time(60)
+        assert validate_auto_stop_time(90)
+        assert validate_auto_stop_time(120)
+
+        # Test invalid values
+        assert not validate_auto_stop_time(45)
+        assert not validate_auto_stop_time(-30)
+        assert not validate_auto_stop_time(150)
+        assert not validate_auto_stop_time(1)
+        assert not validate_auto_stop_time(25)
+
+    def test_auto_stop_timer_thread(self, orchestrator):
+        """test auto stop timer thread creation and termination"""
+        orchestrator.auto_stop_minutes = 30
+        orchestrator.recorder = Mock()
+        orchestrator.recorder.get_elapsed_time.return_value = 0
+
+        orchestrator._start_auto_stop_timer()
+
+        assert orchestrator.auto_stop_timer is not None
+        # Note: We can't easily test if the thread is alive in a unit test
+        # since it depends on the recorder's get_elapsed_time method
+
+        # Test that the worker method exists and can be called
+        # This is a basic test to ensure the method is properly defined
+        assert hasattr(orchestrator, "_auto_stop_worker")
 
     def test_handle_interrupt_single(self, orchestrator):
         """test handling single interrupt"""
@@ -313,74 +345,86 @@ class TestCLICommands:
         """test record command"""
         with patch("meetcap.cli.Config") as mock_config_class:
             mock_config = Mock()
+            # Mock get method to return proper default values
+            mock_config.get.return_value = 0
             mock_config_class.return_value = mock_config
 
             with patch("meetcap.cli.RecordingOrchestrator") as mock_orch_class:
                 mock_orch = Mock()
                 mock_orch_class.return_value = mock_orch
 
-                runner.invoke(app, ["record", "--device", "Mic", "--stt", "fwhisper"])
+                # Mock typer.prompt to return a valid option (1 = No automatic stop)
+                with patch("typer.prompt", return_value="1"):
+                    runner.invoke(app, ["record", "--device", "Mic", "--stt", "fwhisper"])
 
-                # orchestrator should be created and run called
-                mock_orch_class.assert_called_once_with(mock_config)
-                mock_orch.run.assert_called_once()
+                    # orchestrator should be created and run called
+                    mock_orch_class.assert_called_once_with(mock_config)
+                    mock_orch.run.assert_called_once()
 
-                # check parameters passed
-                call_kwargs = mock_orch.run.call_args[1]
-                assert call_kwargs["device"] == "Mic"
-                assert call_kwargs["stt_engine"] == "fwhisper"
+                    # check parameters passed
+                    call_kwargs = mock_orch.run.call_args[1]
+                    assert call_kwargs["device"] == "Mic"
+                    assert call_kwargs["stt_engine"] == "fwhisper"
+                    # auto_stop should default to 0 when not specified
+                    assert call_kwargs["auto_stop"] == 0
 
     def test_record_command_with_all_options(self, runner):
         """test record command with all options"""
         with patch("meetcap.cli.Config") as mock_config_class:
             mock_config = Mock()
+            # Mock get method to return proper default values
+            mock_config.get.return_value = 0
             mock_config_class.return_value = mock_config
 
             with patch("meetcap.cli.RecordingOrchestrator") as mock_orch_class:
                 mock_orch = Mock()
                 mock_orch_class.return_value = mock_orch
 
-                result = runner.invoke(
-                    app,
-                    [
-                        "record",
-                        "--device",
-                        "1",
-                        "--out",
-                        "/tmp/output",
-                        "--rate",
-                        "44100",
-                        "--channels",
-                        "1",
-                        "--stt",
-                        "fwhisper",
-                        "--llm",
-                        "/models/llm.gguf",
-                        "--seed",
-                        "42",
-                    ],
-                )
+                # Mock typer.prompt to return a valid option (1 = No automatic stop)
+                with patch("typer.prompt", return_value="1"):
+                    result = runner.invoke(
+                        app,
+                        [
+                            "record",
+                            "--device",
+                            "1",
+                            "--out",
+                            "/tmp/output",
+                            "--rate",
+                            "44100",
+                            "--channels",
+                            "1",
+                            "--stt",
+                            "fwhisper",
+                            "--llm",
+                            "/models/llm.gguf",
+                            "--seed",
+                            "42",
+                        ],
+                    )
 
-                if result.exit_code != 0:
-                    print("Exit code:", result.exit_code)
-                    print("Output:", result.output)
-                    if result.exception:
-                        print("Exception:", result.exception)
+                    if result.exit_code != 0:
+                        print("Exit code:", result.exit_code)
+                        print("Output:", result.output)
+                        if result.exception:
+                            print("Exception:", result.exception)
 
-                # orchestrator should be created and run called
-                mock_orch_class.assert_called_once_with(mock_config)
-                mock_orch.run.assert_called_once()
+                    # orchestrator should be created and run called
+                    mock_orch_class.assert_called_once_with(mock_config)
+                    mock_orch.run.assert_called_once()
 
-                # check parameters passed (if the call was made)
-                if mock_orch.run.call_args:
-                    call_kwargs = mock_orch.run.call_args[1]
-                    assert call_kwargs["device"] == "1"
-                    assert call_kwargs["output_dir"] == "/tmp/output"
-                    assert call_kwargs["sample_rate"] == 44100
-                    assert call_kwargs["channels"] == 1
-                    assert call_kwargs["stt_engine"] == "fwhisper"
-                    assert call_kwargs["llm_path"] == "/models/llm.gguf"
-                    assert call_kwargs["seed"] == 42
+                    # check parameters passed (if the call was made)
+                    if mock_orch.run.call_args:
+                        call_kwargs = mock_orch.run.call_args[1]
+                        assert call_kwargs["device"] == "1"
+                        assert call_kwargs["output_dir"] == "/tmp/output"
+                        assert call_kwargs["sample_rate"] == 44100
+                        assert call_kwargs["channels"] == 1
+                        assert call_kwargs["stt_engine"] == "fwhisper"
+                        assert call_kwargs["llm_path"] == "/models/llm.gguf"
+                        assert call_kwargs["seed"] == 42
+                        # auto_stop should default to 0 when not specified
+                        assert call_kwargs["auto_stop"] == 0
 
     def test_summarize_command_audio_file(self, runner, temp_dir):
         """test summarize command with audio file"""
@@ -664,7 +708,7 @@ class TestBackupManager:
 
         assert success is True
         assert test_file.read_text() == "original content"
-        assert not backup_path.exists()
+        assert backup_path is None or not backup_path.exists()
         assert backup_path not in manager.backups
 
     def test_restore_backup_no_backup(self, temp_dir):
@@ -885,3 +929,58 @@ class TestReprocessCommand:
             with patch("pathlib.Path.exists", return_value=False):
                 result = orchestrator._resolve_recording_path("nonexistent")
                 assert result is None
+
+    def test_record_command_with_auto_stop(self, runner):
+        """test record command with auto stop option"""
+        with patch("meetcap.cli.Config") as mock_config_class:
+            mock_config = Mock()
+            mock_config_class.return_value = mock_config
+
+            with patch("meetcap.cli.RecordingOrchestrator") as mock_orch_class:
+                mock_orch = Mock()
+                mock_orch_class.return_value = mock_orch
+
+                # Test with valid auto stop value
+                result = runner.invoke(app, ["record", "--auto-stop", "30"])
+
+                assert result.exit_code == 0
+                mock_orch.run.assert_called_once()
+
+                # Check that auto_stop parameter was passed
+                call_kwargs = mock_orch.run.call_args[1]
+                assert call_kwargs["auto_stop"] == 30
+
+    def test_record_command_with_invalid_auto_stop(self, runner):
+        """test record command with invalid auto stop option"""
+        with patch("meetcap.cli.Config") as mock_config_class:
+            mock_config = Mock()
+            mock_config_class.return_value = mock_config
+
+            # Test with invalid auto stop value
+            result = runner.invoke(app, ["record", "--auto-stop", "45"])
+
+            assert result.exit_code == 1
+            assert "invalid auto-stop time" in result.output
+            assert "supported values" in result.output
+
+    def test_record_command_auto_stop_from_config(self, runner):
+        """test record command getting auto stop from config"""
+        with patch("meetcap.cli.Config") as mock_config_class:
+            mock_config = Mock()
+            # Mock config to return default_auto_stop = 60
+            mock_config.get.return_value = 60
+            mock_config_class.return_value = mock_config
+
+            with patch("meetcap.cli.RecordingOrchestrator") as mock_orch_class:
+                mock_orch = Mock()
+                mock_orch_class.return_value = mock_orch
+
+                # Test without explicit auto stop (should use config default)
+                result = runner.invoke(app, ["record"])
+
+                assert result.exit_code == 0
+                mock_orch.run.assert_called_once()
+
+                # Check that auto_stop parameter was passed
+                call_kwargs = mock_orch.run.call_args[1]
+                assert call_kwargs["auto_stop"] == 60

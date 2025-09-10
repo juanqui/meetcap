@@ -1,5 +1,6 @@
 """command-line interface for meetcap"""
 
+import os
 import signal
 import sys
 import threading
@@ -53,6 +54,11 @@ app = typer.Typer(
     help="offline meeting recorder & summarizer for macos",
     add_completion=False,
 )
+
+
+def validate_auto_stop_time(minutes: int) -> bool:
+    """validate that auto stop time is one of the supported options."""
+    return minutes in [0, 30, 60, 90, 120]
 
 
 class BackupManager:
@@ -149,6 +155,8 @@ class RecordingOrchestrator:
         self.graceful_stop_requested = False
         self.memory_monitor = None
         self.enable_memory_monitoring = config.get("memory", "enable_monitoring", False)
+        self.auto_stop_minutes = None
+        self.auto_stop_timer = None
 
     def run(
         self,
@@ -159,6 +167,7 @@ class RecordingOrchestrator:
         stt_engine: str | None = None,
         llm_path: str | None = None,
         seed: int | None = None,
+        auto_stop: int | None = None,
     ) -> None:
         """
         run the complete recording workflow.
@@ -171,6 +180,7 @@ class RecordingOrchestrator:
             stt_engine: stt engine to use
             llm_path: path to llm model
             seed: random seed for llm
+            auto_stop: minutes after which to automatically stop recording
         """
         # setup configuration
         if output_dir:
@@ -242,13 +252,21 @@ class RecordingOrchestrator:
             self.hotkey_manager.start(hotkey_combo)
             console.print("[cyan]⌃C[/cyan] press once to stop recording, twice to exit")
 
+            # If auto_stop is specified, start timer thread
+            if self.auto_stop_minutes is not None and self.auto_stop_minutes > 0:
+                self._start_auto_stop_timer()
+
             # show progress while recording
             self._show_recording_progress()
 
-            # stop recording (triggered by hotkey or Ctrl-C)
+            # stop recording (triggered by hotkey, Ctrl-C, or auto timer)
             final_path = self.recorder.stop_recording()
             if not final_path:
                 ErrorHandler.handle_runtime_error(RuntimeError("recording failed or was empty"))
+
+            # cleanup auto stop timer
+            if self.auto_stop_timer and self.auto_stop_timer.is_alive():
+                self.auto_stop_timer.join(timeout=1.0)
 
             # run transcription and summarization
             self.processing_complete = False
@@ -338,6 +356,33 @@ class RecordingOrchestrator:
     def _stop_recording(self) -> None:
         """callback for hotkey to stop recording."""
         self.stop_event.set()
+        # Signal to the progress display thread to stop
+        if self.recorder:
+            self.recorder._stop_event.set()
+
+    def _start_auto_stop_timer(self) -> None:
+        """start background timer for automatic stopping."""
+        self.auto_stop_timer = threading.Thread(target=self._auto_stop_worker, daemon=True)
+        self.auto_stop_timer.start()
+
+    def _auto_stop_worker(self) -> None:
+        """background worker that monitors recording time and triggers auto stop."""
+        import time
+
+        if not self.auto_stop_minutes:
+            return
+
+        stop_seconds = self.auto_stop_minutes * 60
+
+        while not self.stop_event.is_set():
+            elapsed = self.recorder.get_elapsed_time()
+            if elapsed >= stop_seconds:
+                console.print(
+                    f"\n[yellow]⏱️[/yellow] automatically stopping recording after {self.auto_stop_minutes} minutes"
+                )
+                self._stop_recording()
+                break
+            time.sleep(1)  # Check every second
 
     def _show_recording_progress(self) -> None:
         """display recording progress until stopped."""
@@ -356,11 +401,20 @@ class RecordingOrchestrator:
                 minutes = int(elapsed // 60)
                 seconds = int(elapsed % 60)
 
-                console.print(
-                    f"[cyan]recording[/cyan] {minutes:02d}:{seconds:02d} "
-                    f"[dim]({hotkey_str} or ⌃C to stop)[/dim]",
-                    end="\r",
-                )
+                # Build progress display string
+                progress_str = f"[cyan]recording[/cyan] {minutes:02d}:{seconds:02d}"
+
+                # Add time remaining if auto-stop is active
+                if self.auto_stop_minutes and self.auto_stop_minutes > 0:
+                    total_seconds = self.auto_stop_minutes * 60
+                    remaining_seconds = max(0, total_seconds - elapsed)
+                    remaining_minutes = int(remaining_seconds // 60)
+                    remaining_seconds = int(remaining_seconds % 60)
+                    progress_str += f" [dim](⏱️ auto-stop in {remaining_minutes:02d}:{remaining_seconds:02d})[/dim]"
+                else:
+                    progress_str += f" [dim]({hotkey_str} or ⌃C to stop)[/dim]"
+
+                console.print(progress_str, end="\r")
 
                 # use stop_event.wait() instead of time.sleep() to be more responsive
                 if self.stop_event.wait(timeout=0.5):
@@ -994,8 +1048,63 @@ def record(
         "--log-file",
         help="path to log file",
     ),
+    auto_stop: int | None = typer.Option(
+        None,
+        "--auto-stop",
+        help="auto stop recording after minutes (30, 60, 90, 120)",
+    ),
 ) -> None:
-    """start recording a meeting"""
+    """start recording a meeting with optional scheduled stop"""
+
+    # setup logging
+    if log_file:
+        logger.add_file_handler(Path(log_file))
+
+    # load config
+    config = Config()
+
+    # Check environment variable if auto_stop is not specified
+    if auto_stop is None:
+        env_auto_stop = os.environ.get("MEETCAP_RECORDING_AUTO_STOP")
+        if env_auto_stop:
+            try:
+                auto_stop = int(env_auto_stop)
+            except ValueError:
+                auto_stop = None
+
+    # If auto_stop is not specified, use default from config
+    if auto_stop is None:
+        auto_stop = config.get("recording", "default_auto_stop", 0)
+
+    # If auto_stop is not specified, prompt user
+    if auto_stop is None or auto_stop == 0:
+        console.print("[bold]⏱️ Scheduled Stop Options[/bold]\n")
+        console.print("1. No automatic stop (manual only)")
+        console.print("2. Stop after 30 minutes")
+        console.print("3. Stop after 1 hour")
+        console.print("4. Stop after 1.5 hours")
+        console.print("5. Stop after 2 hours\n")
+
+        choice = typer.prompt("Select option (1-5)", default="1")
+        try:
+            choice_idx = int(choice)
+            if choice_idx == 2:
+                auto_stop = 30
+            elif choice_idx == 3:
+                auto_stop = 60
+            elif choice_idx == 4:
+                auto_stop = 90
+            elif choice_idx == 5:
+                auto_stop = 120
+            # choice_idx == 1 means no automatic stop
+        except ValueError:
+            pass  # Default to no automatic stop
+
+    # Validate auto_stop value
+    if auto_stop is not None and not validate_auto_stop_time(auto_stop):
+        console.print(f"[red]error: invalid auto-stop time {auto_stop} minutes[/red]")
+        console.print("[yellow]supported values: 0, 30, 60, 90, 120[/yellow]")
+        raise typer.Exit(1)
     # setup logging
     if log_file:
         logger.add_file_handler(Path(log_file))
@@ -1014,6 +1123,7 @@ def record(
             stt_engine=stt,
             llm_path=llm,
             seed=seed,
+            auto_stop=auto_stop,
         )
     except KeyboardInterrupt:
         # suppress Typer's "Aborted!" message for KeyboardInterrupt

@@ -24,6 +24,9 @@ class Config:
             "sample_rate": 48000,
             "channels": 2,
         },
+        "recording": {
+            "default_auto_stop": 0,  # Default scheduled stop time in minutes (0 = no auto stop)
+        },
         "hotkey": {
             "stop": "<cmd>+<shift>+s",
         },
