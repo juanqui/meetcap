@@ -994,6 +994,7 @@ class TestReprocessCommand:
 
             # Mock the notes file creation
             def mock_create_notes(recording_dir):
+                recording_dir.mkdir(parents=True, exist_ok=True)  # Ensure directory exists
                 notes_path = recording_dir / "notes.md"
                 with open(notes_path, "w") as f:
                     f.write("# Meeting Notes\n\nTest content\n")

@@ -606,5 +606,24 @@ class MockSummarizationService:
         user_prompt_parts.append(f"transcript:\n{transcript_text}")
         # user_prompt = "\n\n".join(user_prompt_parts)  # Not used in mock
 
-        # Mock LLM response
-        return '## summary\n\nThis meeting was about project timeline.\n\n## key discussion points\n\n- Project planning\n- Timeline review\n\n## decisions\n\nApproved project timeline\n\n## action items\n\n- [ ] Team — Finalize project plan (due: TBD)\n\n## notable quotes\n\n"Let\'s move forward with the plan"'
+        # Mock LLM response that includes manual notes content
+        base_summary = '## summary\n\nThis meeting was about project timeline.\n\n## key discussion points\n\n- Project planning\n- Timeline review\n\n## decisions\n\nApproved project timeline\n\n## action items\n\n- [ ] Team — Finalize project plan (due: TBD)\n\n## notable quotes\n\n"Let\'s move forward with the plan"'
+
+        # Include manual notes content in the summary if available
+        if manual_notes_text:
+            # Extract the key content from manual notes (skip the header)
+            lines = manual_notes_text.strip().split("\n")
+            key_content = []
+            for line in lines:
+                if line.strip() and not line.startswith("#"):
+                    key_content.append(line.strip())
+
+            if key_content:
+                # Insert manual notes content into the summary
+                manual_notes_section = " ".join(key_content)
+                base_summary = base_summary.replace(
+                    "This meeting was about project timeline.",
+                    f"This meeting was about project timeline. {manual_notes_section}",
+                )
+
+        return base_summary

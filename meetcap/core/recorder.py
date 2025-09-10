@@ -82,6 +82,9 @@ class AudioRecorder:
             recording_dir = self.output_dir / f"{timestamp}-temp"
             recording_dir.mkdir(parents=True, exist_ok=True)
             output_path = recording_dir / "recording.wav"
+        else:
+            # for custom output paths, recording_dir is the parent directory
+            recording_dir = output_path.parent
 
         # build ffmpeg command for single aggregate input
         cmd = [
@@ -183,6 +186,9 @@ class AudioRecorder:
             recording_dir = self.output_dir / f"{timestamp}-temp"
             recording_dir.mkdir(parents=True, exist_ok=True)
             output_path = recording_dir / "recording.wav"
+        else:
+            # for custom output paths, recording_dir is the parent directory
+            recording_dir = output_path.parent
 
         # build ffmpeg command for dual input with amix
         cmd = [
