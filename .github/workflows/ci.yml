@@ -32,19 +32,25 @@ jobs:
     - name: Install Hatch
       run: pip install --upgrade hatch
 
+    - name: Install lint dependencies only (skip optional deps)
+      run: |
+        hatch env create --skip-install
+        hatch run python -m pip install -e . --no-deps
+        hatch run python -m pip install ruff black mypy
+
     - name: Run linting and formatting checks
-      env:
-        CMAKE_ARGS: "-DGGML_NO_ACCELERATE=ON -DGGML_NO_METAL=ON -DGGML_NO_LLAMAFILE=ON"
-        GGML_NO_ACCELERATE: 1
-        GGML_NO_METAL: 1
       run: |
         hatch run lint
 
     - name: Test with pytest
       env:
-        CMAKE_ARGS: "-DGGML_NO_ACCELERATE=ON -DGGML_NO_METAL=ON -DGGML_NO_LLAMAFILE=ON"
+        CMAKE_ARGS: "-DGGML_NO_ACCELERATE=ON -DGGML_NO_METAL=ON -DGGML_NO_LLAMAFILE=ON -DGGML_NO_CPU_REPACK=ON"
         GGML_NO_ACCELERATE: 1
         GGML_NO_METAL: 1
+        GGML_NO_LLAMAFILE: 1
+        GGML_NO_CPU_REPACK: 1
+        CFLAGS: "-march=armv8-a"
+        CXXFLAGS: "-march=armv8-a"
       run: |
         hatch run test-cov
 
