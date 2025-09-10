@@ -130,6 +130,7 @@ class SummarizationService:
         meeting_title: str | None = None,
         attendees: list[str] | None = None,
         has_speaker_info: bool = False,
+        manual_notes_path: Path | None = None,
     ) -> str:
         """
         generate meeting summary from transcript.
@@ -233,13 +234,27 @@ class SummarizationService:
                 "do not include any thinking tags or meta-commentary."
             )
 
-        # build user prompt
+        # read manual notes if available
+        manual_notes_text = ""
+        if manual_notes_path and manual_notes_path.exists():
+            try:
+                with open(manual_notes_path, encoding="utf-8") as f:
+                    manual_notes_text = f.read()
+                console.print("[dim]manual notes found, including in summary[/dim]")
+            except Exception as e:
+                console.print(f"[yellow]⚠[/yellow] could not read manual notes: {e}")
+
+        # build user prompt with manual notes
         user_prompt_parts = []
 
         if meeting_title:
             user_prompt_parts.append(f"meeting: {meeting_title}")
         if attendees:
             user_prompt_parts.append(f"attendees: {', '.join(attendees)}")
+
+        # add manual notes first if available
+        if manual_notes_text:
+            user_prompt_parts.append(f"manual notes:\n{manual_notes_text}")
 
         user_prompt_parts.append(f"transcript:\n{transcript_text}")
         user_prompt = "\n\n".join(user_prompt_parts)

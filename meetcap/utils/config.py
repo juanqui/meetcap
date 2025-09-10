@@ -67,6 +67,11 @@ class Config:
             "auto_fallback": True,  # automatic model fallback when memory is constrained
             "explicit_lifecycle": True,  # force explicit model loading/unloading
         },
+        "notes": {
+            "enable": True,  # enable manual notes feature
+            "template": "# Meeting Notes\n\n*Add your notes here during or after the meeting*\n\n*This file will be included in the final summary*\n",  # template for new notes files
+            "filename": "notes.md",  # default notes file name
+        },
     }
 
     def __init__(self, config_path: Path | None = None):
@@ -142,6 +147,14 @@ class Config:
                 "auto_fallback",
                 lambda x: x.lower() == "true",
             ),
+            # manual notes settings
+            "MEETCAP_NOTES_ENABLE": (
+                "notes",
+                "enable",
+                lambda x: x.lower() == "true",
+            ),
+            "MEETCAP_NOTES_TEMPLATE": ("notes", "template"),
+            "MEETCAP_NOTES_FILENAME": ("notes", "filename"),
         }
 
         for env_var, path_spec in env_mapping.items():

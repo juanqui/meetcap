@@ -128,6 +128,18 @@ class AudioRecorder:
                 stderr = process.stderr.read().decode("utf-8", errors="replace")
                 raise RuntimeError(f"ffmpeg failed to start: {stderr[:500]}")
 
+            # create notes.md file in the recording directory
+            notes_path = recording_dir / "notes.md"
+            try:
+                with open(notes_path, "w", encoding="utf-8") as f:
+                    f.write("# Meeting Notes\n\n")
+                    f.write("*Add your notes here during or after the meeting*\n\n")
+                    f.write("*This file will be included in the final summary*\n")
+                console.print(f"[green]✓[/green] notes file created: {notes_path.name}")
+                console.print(f"  path: {notes_path.absolute()}")
+            except Exception as e:
+                console.print(f"[yellow]⚠[/yellow] could not create notes file: {e}")
+
             console.print(f"[green]✓[/green] recording started: {output_path.name}")
             console.print(f"  device: {device_name} (index {device_index})")
             console.print(f"  format: {self.sample_rate} hz, {self.channels} channels")

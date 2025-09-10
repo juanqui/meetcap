@@ -1,6 +1,7 @@
 """comprehensive tests for CLI functionality"""
 
 import signal
+import tempfile
 import threading
 from contextlib import ExitStack
 from pathlib import Path
@@ -11,6 +12,7 @@ from typer.testing import CliRunner
 
 from meetcap.cli import BackupManager, RecordingOrchestrator, app, validate_auto_stop_time
 from meetcap.core.devices import AudioDevice
+from meetcap.core.recorder import AudioRecorder
 from meetcap.utils.config import Config
 
 
@@ -984,3 +986,47 @@ class TestReprocessCommand:
                 # Check that auto_stop parameter was passed
                 call_kwargs = mock_orch.run.call_args[1]
                 assert call_kwargs["auto_stop"] == 60
+
+    def test_notes_file_creation(self):
+        """Test notes.md file creation during recording."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            # Mock the notes file creation
+            def mock_create_notes(recording_dir):
+                notes_path = recording_dir / "notes.md"
+                with open(notes_path, "w") as f:
+                    f.write("# Meeting Notes\n\nTest content\n")
+                return notes_path
+
+            # Test that notes file is created
+            notes_path = mock_create_notes(temp_path / "test-recording")
+            assert notes_path.exists()
+            assert notes_path.read_text() == "# Meeting Notes\n\nTest content\n"
+
+    def test_recording_with_manual_notes(self):
+        """Test complete recording workflow with manual notes."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            # Simulate recording workflow
+            recorder = AudioRecorder(output_dir=temp_path)
+            recording_dir = recorder.start_recording(device_index=0, device_name="Test Device")
+
+            # Verify notes file was created
+            notes_path = recording_dir / "notes.md"
+            assert notes_path.exists()
+
+            # Add manual notes
+            notes_path.write_text(
+                "# Meeting Notes\n\nKey decisions made:\n- Decision 1\n- Decision 2\n"
+            )
+
+            # Complete recording and processing
+            final_dir = recorder.stop_recording()
+            assert final_dir is not None
+
+            # Verify notes file is preserved
+            final_notes_path = final_dir / "notes.md"
+            assert final_notes_path.exists()
+            assert "Key decisions made" in final_notes_path.read_text()

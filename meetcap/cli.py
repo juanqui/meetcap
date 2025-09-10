@@ -56,6 +56,32 @@ app = typer.Typer(
 )
 
 
+def create_notes_file(config: Config, recording_dir: Path) -> Path | None:
+    """Create notes.md file in recording directory."""
+    notes_path = recording_dir / "notes.md"
+    try:
+        template = config.get("notes", "template", "# Meeting Notes\n\n*Add your notes here*\n")
+        with open(notes_path, "w", encoding="utf-8") as f:
+            f.write(template)
+        return notes_path
+    except Exception as e:
+        console.print(f"[yellow]⚠[/yellow] could not create notes file: {e}")
+        return None
+
+
+def read_manual_notes(notes_path: Path) -> str:
+    """Read manual notes file with error handling."""
+    if not notes_path.exists():
+        return ""
+
+    try:
+        with open(notes_path, encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:
+        console.print(f"[yellow]⚠[/yellow] could not read manual notes: {e}")
+        return ""
+
+
 def validate_auto_stop_time(minutes: int) -> bool:
     """validate that auto stop time is one of the supported options."""
     return minutes in [0, 30, 60, 90, 120]
@@ -80,6 +106,19 @@ class BackupManager:
         """
         if not file_path.exists():
             return None
+
+        # backup notes files specifically
+        if file_path.name == "notes.md":
+            backup_path = file_path.with_suffix(file_path.suffix + ".backup")
+            try:
+                import shutil
+
+                shutil.copy2(file_path, backup_path)
+                self.backups.append(backup_path)
+                return backup_path
+            except Exception as e:
+                logger.error(f"failed to create backup for {file_path}: {e}")
+                return None
 
         backup_path = file_path.with_suffix(file_path.suffix + ".backup")
         try:
@@ -404,6 +443,13 @@ class RecordingOrchestrator:
                 # Build progress display string
                 progress_str = f"[cyan]recording[/cyan] {minutes:02d}:{seconds:02d}"
 
+                # Add notes file path display
+                if self.recorder:
+                    recording_dir = self.recorder.session.output_path.parent
+                    notes_path = recording_dir / "notes.md"
+                    if notes_path.exists():
+                        progress_str += f" [dim]notes: {notes_path.absolute()}[/dim]"
+
                 # Add time remaining if auto-stop is active
                 if self.auto_stop_minutes and self.auto_stop_minutes > 0:
                     total_seconds = self.auto_stop_minutes * 60
@@ -594,6 +640,9 @@ class RecordingOrchestrator:
             with open(transcript_path, encoding="utf-8") as f:
                 transcript_text = f.read()
 
+            # determine manual notes path
+            manual_notes_path = base_path.with_name("notes.md")
+
             # check if speaker information is available
             has_speaker_info = False
             json_path = base_path.with_suffix(".transcript.json")
@@ -607,7 +656,11 @@ class RecordingOrchestrator:
                 except Exception:
                     pass  # ignore errors reading JSON
 
-            summary = llm_service.summarize(transcript_text, has_speaker_info=has_speaker_info)
+            summary = llm_service.summarize(
+                transcript_text,
+                has_speaker_info=has_speaker_info,
+                manual_notes_path=manual_notes_path,
+            )
             summary_path = save_summary(summary, base_path)
 
             # explicitly unload model after summarization
@@ -737,6 +790,9 @@ class RecordingOrchestrator:
 
         # show final results with absolute paths for easy navigation
         if is_recording_workflow:
+            # determine notes file path
+            notes_path = final_dir_path / "notes.md"
+
             console.print(
                 Panel(
                     f"[green]✅ recording complete![/green]\n\n"
@@ -745,20 +801,25 @@ class RecordingOrchestrator:
                     f"  audio: {audio_file.absolute()}\n"
                     f"  transcript: {text_path.absolute()}\n"
                     f"  json: {json_path.absolute()}\n"
-                    f"  summary: {summary_path.absolute()}",
+                    f"  summary: {summary_path.absolute()}\n"
+                    f"  notes: {notes_path.absolute()}",
                     title="📦 output files",
                     expand=False,
                 )
             )
         else:
             # for standalone files, show simpler output with absolute paths
+            # determine notes file path
+            notes_path = base_path.with_name("notes.md")
+
             console.print(
                 Panel(
                     f"[green]✅ processing complete![/green]\n\n"
                     f"[bold]output files:[/bold]\n"
                     f"  transcript: {text_path.absolute()}\n"
                     f"  json: {json_path.absolute()}\n"
-                    f"  summary: {summary_path.absolute()}",
+                    f"  summary: {summary_path.absolute()}\n"
+                    f"  notes: {notes_path.absolute()}",
                     title="📦 results",
                     expand=False,
                 )
@@ -832,6 +893,12 @@ class RecordingOrchestrator:
         transcript_txt = recording_dir / "recording.transcript.txt"
         transcript_json = recording_dir / "recording.transcript.json"
         summary_md = recording_dir / "recording.summary.md"
+        notes_md = recording_dir / "notes.md"
+
+        # backup notes.md for reprocessing
+        if notes_md.exists():
+            backup_manager_instance = BackupManager()
+            backup_manager_instance.create_backup(notes_md)
 
         # for summary mode, transcript must exist
         if mode == "summary" and not transcript_txt.exists():
@@ -994,6 +1061,10 @@ class RecordingOrchestrator:
             )
 
         except Exception as e:
+            # restore notes.md from backup on failure
+            if notes_md.exists():
+                backup_manager.create_backup(notes_md)
+
             # restore from backups on failure
             console.print(f"\n[red]error during reprocessing: {e}[/red]")
             console.print("[yellow]restoring from backups...[/yellow]")

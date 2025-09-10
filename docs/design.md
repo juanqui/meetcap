@@ -88,7 +88,7 @@ user          cli           orchestrator    recorder(ffmpeg)   hotkey    stt svc
  |                  | summarize    |                                               done     |  run llm       |
  |                  |--------------------------------------------------------------------->|---------------->|
  |                  | print paths  |                                                                      done|
- |                  |<-------------|                                                                              
+ |                  |<-------------|
 ```
 
 ### 4.3 States (orchestrator)

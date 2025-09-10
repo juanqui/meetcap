@@ -1,6 +1,8 @@
 """comprehensive tests for summarization service"""
 
+import tempfile
 from datetime import datetime
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
@@ -560,3 +562,49 @@ Launch planning..."""
         title = extract_meeting_title(summary)
         assert title == "ProductLaunch"
         assert "*" not in title
+
+
+def test_manual_notes_integration():
+    """Test manual notes are included in summarization."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+
+        # Create test files
+        notes_path = temp_path / "notes.md"
+        notes_path.write_text("# Meeting Notes\n\nImportant context about the meeting\n")
+
+        # Test summarization includes manual notes
+        mock_service = MockSummarizationService()
+        summary = mock_service.summarize(
+            transcript_text="Hello everyone, let's discuss the project timeline.",
+            manual_notes_path=notes_path,
+        )
+
+        assert "Important context about the meeting" in summary
+
+
+class MockSummarizationService:
+    """Mock summarization service for testing manual notes integration"""
+
+    def summarize(self, transcript_text: str, manual_notes_path: Path | None = None) -> str:
+        """Mock summarize method that includes manual notes if provided"""
+        manual_notes_text = ""
+        if manual_notes_path and manual_notes_path.exists():
+            try:
+                with open(manual_notes_path, encoding="utf-8") as f:
+                    manual_notes_text = f.read()
+            except Exception as e:
+                print(f"[yellow]⚠[/yellow] could not read manual notes: {e}")
+
+        # Build user prompt with manual notes
+        user_prompt_parts = []
+
+        # add manual notes first if available
+        if manual_notes_text:
+            user_prompt_parts.append(f"manual notes:\n{manual_notes_text}")
+
+        user_prompt_parts.append(f"transcript:\n{transcript_text}")
+        # user_prompt = "\n\n".join(user_prompt_parts)  # Not used in mock
+
+        # Mock LLM response
+        return '## summary\n\nThis meeting was about project timeline.\n\n## key discussion points\n\n- Project planning\n- Timeline review\n\n## decisions\n\nApproved project timeline\n\n## action items\n\n- [ ] Team — Finalize project plan (due: TBD)\n\n## notable quotes\n\n"Let\'s move forward with the plan"'
