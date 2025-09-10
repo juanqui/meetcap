@@ -55,6 +55,15 @@ class Config:
         "telemetry": {
             "disable": True,
         },
+        "memory": {
+            "aggressive_gc": True,  # enable aggressive garbage collection between models
+            "enable_monitoring": False,  # enable memory monitoring and reporting
+            "memory_report": False,  # print detailed memory report after processing
+            "warning_threshold": 80,  # memory pressure warning threshold (percentage)
+            "critical_threshold": 90,  # memory pressure critical threshold (percentage)
+            "auto_fallback": True,  # automatic model fallback when memory is constrained
+            "explicit_lifecycle": True,  # force explicit model loading/unloading
+        },
     }
 
     def __init__(self, config_path: Path | None = None):
@@ -112,6 +121,24 @@ class Config:
             "MEETCAP_N_CTX": ("llm", "n_ctx", int),
             "MEETCAP_N_THREADS": ("llm", "n_threads", int),
             "MEETCAP_N_GPU_LAYERS": ("llm", "n_gpu_layers", int),
+            # memory management settings
+            "MEETCAP_MEMORY_AGGRESSIVE_GC": (
+                "memory",
+                "aggressive_gc",
+                lambda x: x.lower() == "true",
+            ),
+            "MEETCAP_MEMORY_MONITORING": (
+                "memory",
+                "enable_monitoring",
+                lambda x: x.lower() == "true",
+            ),
+            "MEETCAP_MEMORY_REPORT": ("memory", "memory_report", lambda x: x.lower() == "true"),
+            "MEETCAP_MEMORY_WARNING_THRESHOLD": ("memory", "warning_threshold", int),
+            "MEETCAP_MEMORY_AUTO_FALLBACK": (
+                "memory",
+                "auto_fallback",
+                lambda x: x.lower() == "true",
+            ),
         }
 
         for env_var, path_spec in env_mapping.items():

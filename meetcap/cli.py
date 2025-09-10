@@ -42,6 +42,10 @@ from meetcap.services.transcription import (
 )
 from meetcap.utils.config import Config
 from meetcap.utils.logger import ErrorHandler, logger
+from meetcap.utils.memory import (
+    MemoryMonitor,
+    check_memory_pressure,
+)
 
 console = Console()
 app = typer.Typer(
@@ -143,6 +147,8 @@ class RecordingOrchestrator:
         self.last_interrupt_time = 0
         self.processing_complete = False
         self.graceful_stop_requested = False
+        self.memory_monitor = None
+        self.enable_memory_monitoring = config.get("memory", "enable_monitoring", False)
 
     def run(
         self,
@@ -386,6 +392,12 @@ class RecordingOrchestrator:
         """
         console.print("\n[bold]📝 transcription[/bold]")
 
+        # check memory pressure before loading STT model
+        if self.config.get("memory", "auto_fallback", True):
+            threshold = self.config.get("memory", "warning_threshold", 80)
+            # ensure threshold is a float
+            check_memory_pressure(float(threshold))
+
         # use configured engine if not specified
         if not stt_engine:
             stt_engine = self.config.get("models", "stt_engine", "faster-whisper")
@@ -436,11 +448,32 @@ class RecordingOrchestrator:
             )
 
         try:
+            # explicitly load model if supported
+            if hasattr(stt_service, "load_model"):
+                stt_service.load_model()
+
             transcript_result = stt_service.transcribe(audio_file)
             text_path, json_path = save_transcript(transcript_result, base_path)
+
+            # explicitly unload model after transcription
+            if hasattr(stt_service, "unload_model"):
+                stt_service.unload_model()
+
+                # force garbage collection if configured
+                if self.config.get("memory", "aggressive_gc", True):
+                    import gc
+
+                    gc.collect()
+
             return text_path, json_path
         except Exception as e:
             console.print(f"[red]transcription failed: {e}[/red]")
+            # ensure cleanup on error
+            if hasattr(stt_service, "unload_model"):
+                try:
+                    stt_service.unload_model()
+                except Exception:
+                    pass
             return None
 
     def _process_transcript_to_summary(
@@ -463,6 +496,12 @@ class RecordingOrchestrator:
             path to summary file or None if failed
         """
         console.print("\n[bold]🤖 summarization[/bold]")
+
+        # check memory pressure before loading LLM model
+        if self.config.get("memory", "auto_fallback", True):
+            threshold = self.config.get("memory", "warning_threshold", 80)
+            # ensure threshold is a float
+            check_memory_pressure(float(threshold))
 
         # use provided path or default from config
         if llm_path:
@@ -493,6 +532,10 @@ class RecordingOrchestrator:
         )
 
         try:
+            # explicitly load model if supported
+            if hasattr(llm_service, "load_model"):
+                llm_service.load_model()
+
             # read transcript text
             with open(transcript_path, encoding="utf-8") as f:
                 transcript_text = f.read()
@@ -512,9 +555,26 @@ class RecordingOrchestrator:
 
             summary = llm_service.summarize(transcript_text, has_speaker_info=has_speaker_info)
             summary_path = save_summary(summary, base_path)
+
+            # explicitly unload model after summarization
+            if hasattr(llm_service, "unload_model"):
+                llm_service.unload_model()
+
+                # force garbage collection if configured
+                if self.config.get("memory", "aggressive_gc", True):
+                    import gc
+
+                    gc.collect()
+
             return summary_path
         except Exception as e:
             console.print(f"[red]summarization failed: {e}[/red]")
+            # ensure cleanup on error
+            if hasattr(llm_service, "unload_model"):
+                try:
+                    llm_service.unload_model()
+                except Exception:
+                    pass
             return None
 
     def _process_recording(
@@ -533,6 +593,11 @@ class RecordingOrchestrator:
             llm_path: optional llm model path
             seed: optional random seed
         """
+        # initialize memory monitoring if enabled
+        if self.enable_memory_monitoring:
+            self.memory_monitor = MemoryMonitor()
+            self.memory_monitor.checkpoint("start")
+
         # handle both directory and file inputs
         if audio_path.is_dir():
             # called from recording workflow - directory-based
@@ -557,15 +622,25 @@ class RecordingOrchestrator:
             base_path = audio_file.parent / audio_file.stem
 
         # transcription
+        if self.memory_monitor:
+            self.memory_monitor.checkpoint("before_stt")
+
         result = self._process_audio_to_transcript(audio_file, base_path, stt_engine)
         if not result:
             return
         text_path, json_path = result
 
+        if self.memory_monitor:
+            self.memory_monitor.checkpoint("after_stt")
+            self.memory_monitor.checkpoint("before_llm")
+
         # summarization
         summary_path = self._process_transcript_to_summary(text_path, base_path, llm_path, seed)
         if not summary_path:
             return
+
+        if self.memory_monitor:
+            self.memory_monitor.checkpoint("after_llm")
 
         # read transcript text for title extraction
         with open(text_path, encoding="utf-8") as f:
@@ -634,6 +709,10 @@ class RecordingOrchestrator:
                     expand=False,
                 )
             )
+
+        # show memory report if monitoring enabled
+        if self.memory_monitor and self.config.get("memory", "memory_report", False):
+            self.memory_monitor.report(detailed=True)
 
     def _resolve_recording_path(self, path_str: str) -> Path | None:
         """

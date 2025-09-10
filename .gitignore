@@ -68,7 +68,7 @@ models/
 
 # Local Dev
 .mcp.json
-docs/specs/
+#docs/specs/
 coverage.xml
 .coverage*
 

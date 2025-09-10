@@ -107,12 +107,24 @@ def reset_environment():
         "MEETCAP_SAMPLE_RATE",
         "MEETCAP_CHANNELS",
         "MEETCAP_HOTKEY",
+        "MEETCAP_STT_ENGINE",
         "MEETCAP_STT_MODEL",
+        "MEETCAP_MLX_STT_MODEL",
+        "MEETCAP_VOSK_MODEL",
+        "MEETCAP_VOSK_MODEL_PATH",
+        "MEETCAP_VOSK_SPK_MODEL",
+        "MEETCAP_ENABLE_DIARIZATION",
         "MEETCAP_LLM_MODEL",
         "MEETCAP_OUT_DIR",
         "MEETCAP_N_CTX",
         "MEETCAP_N_THREADS",
         "MEETCAP_N_GPU_LAYERS",
+        # Memory management env vars
+        "MEETCAP_MEMORY_AGGRESSIVE_GC",
+        "MEETCAP_MEMORY_MONITORING",
+        "MEETCAP_MEMORY_REPORT",
+        "MEETCAP_MEMORY_WARNING_THRESHOLD",
+        "MEETCAP_MEMORY_AUTO_FALLBACK",
     ]
 
     # store original environment
@@ -173,3 +185,12 @@ def mock_llama_cpp():
 
     with patch.dict("sys.modules", {"llama_cpp": mock_module}):
         yield mock_module, mock_llama
+
+
+@pytest.fixture
+def config(temp_config_dir):
+    """create a config instance for testing"""
+    from meetcap.utils.config import Config
+
+    config_path = temp_config_dir / "config.toml"
+    return Config(config_path)

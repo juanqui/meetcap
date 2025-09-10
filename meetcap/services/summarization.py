@@ -77,6 +77,53 @@ class SummarizationService:
             verbose=False,
         )
 
+    def load_model(self) -> None:
+        """explicitly load the llm model."""
+        self._load_model()
+
+    def unload_model(self) -> None:
+        """unload llama-cpp-python model and cleanup resources."""
+        if self.llm is not None:
+            # llama-cpp-python handles cleanup in destructor
+            del self.llm
+            self.llm = None
+
+            # Clear Metal/GPU cache if available
+            try:
+                import mlx.core as mx
+
+                mx.metal.clear_cache()
+            except (ImportError, AttributeError):
+                pass
+
+            # Force garbage collection
+            import gc
+
+            gc.collect()
+
+            console.print("[dim]llm model unloaded[/dim]")
+
+    def is_loaded(self) -> bool:
+        """check if model is currently loaded."""
+        return self.llm is not None
+
+    def get_memory_usage(self) -> dict:
+        """return current memory usage statistics."""
+        try:
+            import os
+
+            import psutil
+
+            process = psutil.Process(os.getpid())
+            memory_info = process.memory_info()
+            return {
+                "rss_mb": memory_info.rss / 1024 / 1024,  # Physical memory
+                "vms_mb": memory_info.vms / 1024 / 1024,  # Virtual memory
+                "percent": process.memory_percent(),
+            }
+        except ImportError:
+            return {"rss_mb": 0, "vms_mb": 0, "percent": 0}
+
     def summarize(
         self,
         transcript_text: str,

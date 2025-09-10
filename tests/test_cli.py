@@ -394,6 +394,15 @@ class TestCLICommands:
             def mock_get_side_effect(section, key, default=None):
                 if section == "models" and key == "llm_gguf_path":
                     return str(temp_dir / "model.gguf")
+                elif section == "memory":
+                    # Return proper memory config defaults
+                    memory_config = {
+                        "auto_fallback": True,
+                        "warning_threshold": 80,
+                        "aggressive_gc": True,
+                        "enable_monitoring": False,
+                    }
+                    return memory_config.get(key, default)
                 return default
 
             mock_config.get.side_effect = mock_get_side_effect
@@ -447,8 +456,19 @@ class TestCLICommands:
                     return "large-v3"
                 elif section == "models" and key == "stt_model_path":
                     return "~/.meetcap/models/whisper-large-v3"
-                else:
+                elif section == "memory":
+                    # Return proper memory config defaults
+                    memory_config = {
+                        "auto_fallback": True,
+                        "warning_threshold": 80,
+                        "aggressive_gc": True,
+                        "enable_monitoring": False,
+                    }
+                    return memory_config.get(key, default)
+                elif section == "models" and key == "llm_gguf_path":
                     return str(temp_dir / "model.gguf")
+                else:
+                    return default
 
             mock_config.get.side_effect = mock_get
             mock_config.expand_path.return_value = temp_dir / "model.gguf"

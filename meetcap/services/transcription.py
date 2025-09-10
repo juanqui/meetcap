@@ -45,6 +45,37 @@ class TranscriptionService:
         """transcribe audio file to text."""
         raise NotImplementedError
 
+    def load_model(self) -> None:
+        """explicitly load model into memory."""
+        # default implementation calls _load_model if it exists
+        if hasattr(self, "_load_model"):
+            self._load_model()
+
+    def unload_model(self) -> None:
+        """explicitly unload model from memory with cleanup."""
+        raise NotImplementedError
+
+    def is_loaded(self) -> bool:
+        """check if model is currently loaded in memory."""
+        return getattr(self, "model", None) is not None
+
+    def get_memory_usage(self) -> dict:
+        """return current memory usage statistics."""
+        try:
+            import os
+
+            import psutil
+
+            process = psutil.Process(os.getpid())
+            memory_info = process.memory_info()
+            return {
+                "rss_mb": memory_info.rss / 1024 / 1024,  # Physical memory
+                "vms_mb": memory_info.vms / 1024 / 1024,  # Virtual memory
+                "percent": process.memory_percent(),
+            }
+        except ImportError:
+            return {"rss_mb": 0, "vms_mb": 0, "percent": 0}
+
 
 class FasterWhisperService(TranscriptionService):
     """transcription using faster-whisper library"""
@@ -241,6 +272,29 @@ class FasterWhisperService(TranscriptionService):
             },
         )
 
+    def unload_model(self) -> None:
+        """unload faster-whisper model and cleanup GPU/CPU resources."""
+        if self.model is not None:
+            # Release model reference
+            del self.model
+            self.model = None
+
+            # Force garbage collection
+            import gc
+
+            gc.collect()
+
+            # Clear GPU cache if using CUDA
+            try:
+                import torch
+
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except ImportError:
+                pass
+
+            console.print("[dim]faster-whisper model unloaded[/dim]")
+
 
 class WhisperCppService(TranscriptionService):
     """transcription using whisper.cpp cli (alternative)"""
@@ -334,6 +388,20 @@ class WhisperCppService(TranscriptionService):
 
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"whisper.cpp failed: {e.stderr}") from e
+
+    def unload_model(self) -> None:
+        """unload WhisperCpp service resources."""
+        # WhisperCpp is CLI-based, no models to unload
+        # Just ensure paths are cleared
+        self.whisper_cpp_path = None
+        self.model_path = None
+
+        # Force garbage collection for any cached data
+        import gc
+
+        gc.collect()
+
+        console.print("[dim]whisper.cpp resources cleared[/dim]")
 
     def _parse_srt(self, srt_text: str) -> list[TranscriptSegment]:
         """parse srt format into segments."""
@@ -551,6 +619,29 @@ class MlxWhisperService(TranscriptionService):
                 "model_path": str(self.model_path) if self.model_path else None,
             },
         )
+
+    def unload_model(self) -> None:
+        """unload MLX-whisper model and cleanup Metal resources."""
+        if self.model is not None:
+            # MLX models don't have explicit cleanup, but we can clear references
+            del self.model
+            self.model = None
+            self.model_source = None
+
+            # Clear MLX memory if available
+            try:
+                import mlx.core as mx
+
+                mx.metal.clear_cache()
+            except (ImportError, AttributeError):
+                pass
+
+            # Force garbage collection
+            import gc
+
+            gc.collect()
+
+            console.print("[dim]mlx-whisper model unloaded[/dim]")
 
 
 class VoskTranscriptionService(TranscriptionService):
@@ -895,6 +986,23 @@ class VoskTranscriptionService(TranscriptionService):
             speakers=speakers,
             diarization_enabled=self.enable_diarization,
         )
+
+    def unload_model(self) -> None:
+        """unload Vosk models and cleanup resources."""
+        if self.model is not None:
+            del self.model
+            self.model = None
+
+        if self.spk_model is not None:
+            del self.spk_model
+            self.spk_model = None
+
+        # Force garbage collection
+        import gc
+
+        gc.collect()
+
+        console.print("[dim]vosk model unloaded[/dim]")
 
 
 def save_transcript(result: TranscriptResult, base_path: Path) -> tuple[Path, Path]:
