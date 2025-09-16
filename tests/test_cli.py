@@ -1010,24 +1010,40 @@ class TestReprocessCommand:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
 
-            # Simulate recording workflow
-            recorder = AudioRecorder(output_dir=temp_path)
-            recording_dir = recorder.start_recording(device_index=0, device_name="Test Device")
+            # Mock subprocess.Popen to avoid calling real ffmpeg
+            with patch("subprocess.Popen") as mock_popen:
+                # Set up mock process
+                mock_process = Mock()
+                mock_process.poll.return_value = None  # process is running
+                mock_process.stdin = Mock()
+                mock_process.stdout = Mock()
+                mock_process.stderr = Mock()
+                mock_process.stderr.read.return_value = b""
+                mock_process.wait.return_value = 0  # successful exit
+                mock_popen.return_value = mock_process
 
-            # Verify notes file was created
-            notes_path = recording_dir / "notes.md"
-            assert notes_path.exists()
+                # Simulate recording workflow
+                recorder = AudioRecorder(output_dir=temp_path)
+                recording_dir = recorder.start_recording(device_index=0, device_name="Test Device")
 
-            # Add manual notes
-            notes_path.write_text(
-                "# Meeting Notes\n\nKey decisions made:\n- Decision 1\n- Decision 2\n"
-            )
+                # Verify notes file was created
+                notes_path = recording_dir / "notes.md"
+                assert notes_path.exists()
 
-            # Complete recording and processing
-            final_dir = recorder.stop_recording()
-            assert final_dir is not None
+                # Add manual notes
+                notes_path.write_text(
+                    "# Meeting Notes\n\nKey decisions made:\n- Decision 1\n- Decision 2\n"
+                )
 
-            # Verify notes file is preserved
-            final_notes_path = final_dir / "notes.md"
-            assert final_notes_path.exists()
-            assert "Key decisions made" in final_notes_path.read_text()
+                # Create mock audio file for recording
+                audio_file = recording_dir / "recording.wav"
+                audio_file.write_bytes(b"x" * 100)  # create non-empty file
+
+                # Complete recording and processing
+                final_dir = recorder.stop_recording()
+                assert final_dir is not None
+
+                # Verify notes file is preserved
+                final_notes_path = final_dir / "notes.md"
+                assert final_notes_path.exists()
+                assert "Key decisions made" in final_notes_path.read_text()
