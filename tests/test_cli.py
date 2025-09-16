@@ -761,6 +761,79 @@ class TestBackupManager:
         for i, test_file in enumerate(files):
             assert test_file.read_text() == f"original {i}"
 
+    def test_backup_notes_file(self, temp_dir):
+        """test backing up notes.md specifically"""
+        notes_file = temp_dir / "notes.md"
+        notes_file.write_text("# Original Notes")
+
+        manager = BackupManager()
+        backup_path = manager.create_backup(notes_file)
+
+        assert backup_path is not None
+        assert backup_path.exists()
+        assert backup_path.name == "notes.md.backup"
+        assert backup_path.read_text() == "# Original Notes"
+        assert notes_file.exists()  # Original should still exist
+
+    def test_create_backup_error(self, temp_dir):
+        """test error handling in create_backup"""
+        test_file = temp_dir / "test.txt"
+        test_file.write_text("original content")
+
+        manager = BackupManager()
+
+        # Cause an error during copy
+        with (
+            patch("shutil.copy2", side_effect=PermissionError("Access denied")),
+            patch("meetcap.utils.logger.logger.error") as mock_logger,
+        ):
+            backup_path = manager.create_backup(test_file)
+
+            assert backup_path is None
+            mock_logger.assert_called_once()
+            assert "failed to create backup" in str(mock_logger.call_args)
+
+    def test_restore_backup_error(self, temp_dir):
+        """test error handling in restore_backup"""
+        test_file = temp_dir / "test.txt"
+        backup_file = temp_dir / "test.txt.backup"
+
+        test_file.write_text("original content")
+        backup_file.write_text("backup content")
+
+        manager = BackupManager()
+        manager.backups.append(backup_file)
+
+        # Cause an error during move
+        with (
+            patch("shutil.move", side_effect=PermissionError("Access denied")),
+            patch("meetcap.utils.logger.logger.error") as mock_logger,
+        ):
+            result = manager.restore_backup(test_file)
+
+            assert result is False
+            mock_logger.assert_called_once()
+            assert "failed to restore backup" in str(mock_logger.call_args)
+
+    def test_cleanup_backups_error(self, temp_dir):
+        """test error handling in cleanup_backups"""
+        backup_file = temp_dir / "test.txt.backup"
+        backup_file.write_text("backup content")
+
+        manager = BackupManager()
+        manager.backups.append(backup_file)
+
+        # Cause an error during unlink
+        with (
+            patch.object(Path, "unlink", side_effect=PermissionError("Access denied")),
+            patch("meetcap.utils.logger.logger.warning") as mock_logger,
+        ):
+            manager.cleanup_backups(temp_dir)
+
+            mock_logger.assert_called_once()
+            assert "failed to remove backup" in str(mock_logger.call_args)
+            assert len(manager.backups) == 0  # backups list should still be cleared
+
 
 class TestReprocessCommand:
     """test reprocess command functionality"""
@@ -1047,3 +1120,126 @@ class TestReprocessCommand:
                 final_notes_path = final_dir / "notes.md"
                 assert final_notes_path.exists()
                 assert "Key decisions made" in final_notes_path.read_text()
+
+
+class TestCLIUtilityFunctions:
+    """Test standalone CLI utility functions"""
+
+    def test_validate_auto_stop_time_valid_values(self):
+        """Test valid auto stop time values"""
+        from meetcap.cli import validate_auto_stop_time
+
+        assert validate_auto_stop_time(0) is True
+        assert validate_auto_stop_time(30) is True
+        assert validate_auto_stop_time(60) is True
+        assert validate_auto_stop_time(90) is True
+        assert validate_auto_stop_time(120) is True
+
+    def test_validate_auto_stop_time_invalid_values(self):
+        """Test invalid auto stop time values"""
+        from meetcap.cli import validate_auto_stop_time
+
+        assert validate_auto_stop_time(-1) is False
+        assert validate_auto_stop_time(15) is False
+        assert validate_auto_stop_time(45) is False
+        assert validate_auto_stop_time(75) is False
+        assert validate_auto_stop_time(150) is False
+
+    def test_create_notes_file_success(self, temp_dir):
+        """Test successful notes file creation"""
+        from meetcap.cli import create_notes_file
+        from meetcap.utils.config import Config
+
+        config = Config(config_path=temp_dir / "config.toml")
+        recording_dir = temp_dir / "recording"
+        recording_dir.mkdir()
+
+        notes_path = create_notes_file(config, recording_dir)
+
+        assert notes_path is not None
+        assert notes_path.exists()
+        assert notes_path.name == "notes.md"
+
+        # Check default content
+        content = notes_path.read_text()
+        assert "Meeting Notes" in content
+        assert "Add your notes here" in content
+
+    def test_create_notes_file_with_custom_template(self, temp_dir):
+        """Test notes file creation with custom template"""
+        from meetcap.cli import create_notes_file
+        from meetcap.utils.config import Config
+
+        # Create config with custom template - use proper TOML escaping
+        config_file = temp_dir / "config.toml"
+        config_content = '''
+[notes]
+template = """# Custom Notes
+
+My custom template
+"""
+'''
+        config_file.write_text(config_content)
+
+        config = Config(config_path=config_file)
+        recording_dir = temp_dir / "recording"
+        recording_dir.mkdir()
+
+        notes_path = create_notes_file(config, recording_dir)
+
+        assert notes_path is not None
+        content = notes_path.read_text()
+        assert "Custom Notes" in content
+        assert "My custom template" in content
+
+    def test_create_notes_file_write_error(self, temp_dir):
+        """Test notes file creation with write error"""
+        from meetcap.cli import create_notes_file
+        from meetcap.utils.config import Config
+
+        config = Config(config_path=temp_dir / "config.toml")
+
+        # Try to create notes in non-existent directory
+        nonexistent_dir = temp_dir / "nonexistent" / "recording"
+
+        with patch("meetcap.cli.console") as mock_console:
+            notes_path = create_notes_file(config, nonexistent_dir)
+
+            assert notes_path is None
+            mock_console.print.assert_called_once()
+            assert "could not create notes file" in str(mock_console.print.call_args)
+
+    def test_read_manual_notes_success(self, temp_dir):
+        """Test successful manual notes reading"""
+        from meetcap.cli import read_manual_notes
+
+        notes_file = temp_dir / "notes.md"
+        test_content = "# Meeting Notes\n\nImportant decisions made"
+        notes_file.write_text(test_content)
+
+        content = read_manual_notes(notes_file)
+        assert content == test_content
+
+    def test_read_manual_notes_file_not_exists(self, temp_dir):
+        """Test reading notes when file doesn't exist"""
+        from meetcap.cli import read_manual_notes
+
+        nonexistent_file = temp_dir / "nonexistent.md"
+        content = read_manual_notes(nonexistent_file)
+        assert content == ""
+
+    def test_read_manual_notes_read_error(self, temp_dir):
+        """Test reading notes with read error"""
+        from meetcap.cli import read_manual_notes
+
+        notes_file = temp_dir / "notes.md"
+        notes_file.write_text("test content")
+
+        # Mock open to raise exception
+        with patch("builtins.open", side_effect=PermissionError("Access denied")):
+            with patch("meetcap.cli.console") as mock_console:
+                content = read_manual_notes(notes_file)
+
+                assert content == ""
+                mock_console.print.assert_called_once()
+                assert "could not read manual notes" in str(mock_console.print.call_args)
