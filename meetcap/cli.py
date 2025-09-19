@@ -221,6 +221,9 @@ class RecordingOrchestrator:
             seed: random seed for llm
             auto_stop: minutes after which to automatically stop recording
         """
+        # Store auto_stop_minutes for timer functionality
+        self.auto_stop_minutes = auto_stop
+
         # setup configuration
         if output_dir:
             out_path = Path(output_dir)

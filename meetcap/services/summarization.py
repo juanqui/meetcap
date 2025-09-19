@@ -192,6 +192,11 @@ class SummarizationService:
                 "- if no action items, write 'no action items identified'\n\n"
                 "## Notable Quotes\n"
                 "include 2-3 important verbatim quotes with speaker attribution\n\n"
+                "IMPORTANT GUIDELINES:\n"
+                "- DO NOT attempt to identify or include the actual names of meeting participants. "
+                "The transcription system is unreliable with names, so refer to speakers only by their labels (e.g., 'Speaker 1', 'Speaker 2').\n"
+                "- DO NOT expand acronyms or assume what they mean. Write acronyms exactly as spoken (e.g., write 'API' not 'Application Programming Interface'). "
+                "The summarization process tends to make errors when expanding abbreviations.\n\n"
                 "be thorough and detailed while maintaining clarity. "
                 "do not include any thinking tags or meta-commentary."
             )
@@ -230,6 +235,11 @@ class SummarizationService:
                 "- if no action items, write 'no action items identified'\n\n"
                 "## Notable Quotes\n"
                 "include 2-3 important verbatim quotes that capture key insights or decisions\n\n"
+                "IMPORTANT GUIDELINES:\n"
+                "- DO NOT attempt to identify or include the actual names of meeting participants. "
+                "The transcription system is unreliable with names, so refer to participants generically (e.g., 'one participant mentioned', 'a team member noted').\n"
+                "- DO NOT expand acronyms or assume what they mean. Write acronyms exactly as spoken (e.g., write 'API' not 'Application Programming Interface'). "
+                "The summarization process tends to make errors when expanding abbreviations.\n\n"
                 "be thorough and detailed while maintaining clarity. "
                 "do not include any thinking tags or meta-commentary."
             )
