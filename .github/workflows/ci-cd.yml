@@ -1,20 +1,28 @@
-name: CI
+name: CI/CD Pipeline
 
 on:
   push:
     branches: [ main, develop ]
+    tags: [ 'v*.*.*' ]
   pull_request:
     branches: [ main, develop ]
+  workflow_dispatch:
 
 jobs:
-  test:
+  # Always run: Test, lint, and build Python package
+  test-and-build:
     runs-on: macos-latest
     strategy:
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
+    outputs:
+      is-release: ${{ startsWith(github.ref, 'refs/tags/v') }}
 
     steps:
-    - uses: actions/checkout@v4
+    - name: Check out code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Needed for proper git history
 
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
@@ -60,6 +68,7 @@ jobs:
         python -m pytest --cov=meetcap tests --cov-report=xml --cov-fail-under=75
 
     - name: Upload coverage to Codecov
+      if: matrix.python-version == '3.11'  # Only upload once
       uses: codecov/codecov-action@v3
       with:
         file: ./coverage.xml
@@ -67,39 +76,63 @@ jobs:
         name: codecov-umbrella
         fail_ci_if_error: false
 
-  build:
-    runs-on: macos-latest
-    needs: test
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.11"
-
-    - name: Set up pip cache
-      uses: actions/cache@v4
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
-
-    - name: Install Hatch
-      run: pip install --upgrade hatch
-
+    # Only build package artifacts once (Python 3.11)
     - name: Build package
+      if: matrix.python-version == '3.11'
       run: hatch build
 
     - name: Check package metadata
+      if: matrix.python-version == '3.11'
       run: |
         pip install twine
         twine check dist/*
 
     - name: Upload build artifacts
+      if: matrix.python-version == '3.11'
       uses: actions/upload-artifact@v4
       with:
         name: dist
         path: dist/
+        retention-days: 7
+
+  # Only on version tags: Publish to PyPI and create GitHub release
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    needs: test-and-build
+    permissions:
+      contents: write
+      id-token: write  # For PyPI trusted publishing
+
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: dist
+        path: dist/
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: dist/*
+        generate_release_notes: true
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Publish to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        password: ${{ secrets.PYPI_API_TOKEN }}
+
+    - name: Output release details
+      run: |
+        echo "🎉 Release ${{ github.ref_name }} published successfully!"
+        echo "📦 PyPI: https://pypi.org/project/meetcap/${{ github.ref_name }}/"
+        echo "📋 GitHub: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}"
