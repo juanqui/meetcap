@@ -55,7 +55,9 @@ jobs:
         CFLAGS: "-march=armv8-a"
         CXXFLAGS: "-march=armv8-a"
       run: |
-        hatch run test-cov
+        # Use direct pytest to avoid hatch argument parsing issues
+        pip install pytest pytest-cov pytest-mock pytest-asyncio pytest-timeout
+        python -m pytest --cov=meetcap tests --cov-report=xml --cov-fail-under=75
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
