@@ -29,6 +29,7 @@ class Config:
         },
         "hotkey": {
             "stop": "<cmd>+<shift>+s",
+            "prefix": "<ctrl>+a",  # prefix key for timer operations
         },
         "models": {
             "stt_engine": "faster-whisper",  # stt engine: faster-whisper, mlx-whisper, or vosk
@@ -117,6 +118,7 @@ class Config:
             "MEETCAP_SAMPLE_RATE": ("audio", "sample_rate", int),
             "MEETCAP_CHANNELS": ("audio", "channels", int),
             "MEETCAP_HOTKEY": ("hotkey", "stop"),
+            "MEETCAP_HOTKEY_PREFIX": ("hotkey", "prefix"),
             "MEETCAP_STT_ENGINE": ("models", "stt_engine"),
             "MEETCAP_STT_MODEL": ("models", "stt_model_path"),
             "MEETCAP_VOSK_MODEL": ("models", "vosk_model_name"),

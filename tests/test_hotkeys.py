@@ -69,24 +69,35 @@ class TestHotkeyManager:
             mock_hotkeys.return_value = mock_listener
 
             with patch("meetcap.core.hotkeys.console") as mock_console:
-                hotkey_manager.start("<cmd>+<shift>+s")
+                # Patch the stop callback to verify it gets called
+                with patch.object(hotkey_manager, "stop_callback") as mock_stop_callback:
+                    hotkey_manager.start("<cmd>+<shift>+s")
 
-                assert hotkey_manager.listener == mock_listener
-                mock_listener.start.assert_called_once()
+                    assert hotkey_manager.listener == mock_listener
+                    mock_listener.start.assert_called_once()
 
-                # verify hotkey mapping
-                hotkeys_arg = mock_hotkeys.call_args[0][0]
-                assert "<cmd>+<shift>+s" in hotkeys_arg
-                # callback should be the wrapper function, not the direct method
-                callback = hotkeys_arg["<cmd>+<shift>+s"]
-                assert callable(callback)
-                # test that the wrapper calls our method
-                with patch.object(hotkey_manager, "_on_stop_hotkey") as mock_stop:
-                    callback()  # call the wrapper
-                    mock_stop.assert_called_once()
+                    # verify hotkey mapping
+                    hotkeys_arg = mock_hotkeys.call_args[0][0]
+                    assert "<cmd>+<shift>+s" in hotkeys_arg
 
-                # verify console output
-                mock_console.print.assert_called_with("[cyan]⌨[/cyan] press ⌘⇧S to stop recording")
+                    # callback should be the wrapper function, not the direct method
+                    callback = hotkeys_arg["<cmd>+<shift>+s"]
+                    assert callable(callback)
+
+                    # verify console output (should show basic version without timer callbacks)
+                    # Check the call before calling the callback
+                    expected_calls = [
+                        call
+                        for call in mock_console.print.call_args_list
+                        if "[cyan]⌨[/cyan]" in str(call)
+                    ]
+                    assert len(expected_calls) == 1
+                    assert "press ⌘⇧S to stop recording" in str(expected_calls[0])
+
+                    # test that the wrapper calls our stop callback with proper time
+                    with patch("time.time", return_value=100.0):
+                        callback()  # call the wrapper
+                        mock_stop_callback.assert_called_once()
 
     def test_start_already_listening(self, hotkey_manager):
         """test start when already listening"""
@@ -152,7 +163,7 @@ class TestHotkeyManager:
                 hotkeys_arg = mock_hotkeys.call_args[0][0]
                 assert "<ctrl>+<alt>+q" in hotkeys_arg
 
-                # verify formatted output
+                # verify formatted output (should show basic version without timer callbacks)
                 mock_console.print.assert_called_with("[cyan]⌨[/cyan] press ⌃⌥Q to stop recording")
 
     def test_lifecycle(self, hotkey_manager):
@@ -175,6 +186,45 @@ class TestHotkeyManager:
             # stop
             hotkey_manager.stop()
             assert hotkey_manager.listener is None
+
+    def test_timer_callback_integration(self):
+        """test hotkey manager with timer callback integration"""
+        stop_callback = Mock()
+        timer_callback = Mock()
+
+        manager = HotkeyManager(stop_callback, timer_callback, "<ctrl>+a")
+
+        with patch("pynput.keyboard.GlobalHotKeys") as mock_hotkeys:
+            mock_listener = Mock()
+            mock_hotkeys.return_value = mock_listener
+
+            with patch("meetcap.core.hotkeys.console") as mock_console:
+                manager.start("<cmd>+<shift>+s")
+
+                # Verify prefix key was registered
+                hotkeys_arg = mock_hotkeys.call_args[0][0]
+                assert "<ctrl>+a" in hotkeys_arg  # prefix key
+                assert "<cmd>+<shift>+s" in hotkeys_arg  # stop key
+
+                # Verify console shows prefix-based shortcuts
+                expected_output = "[cyan]⌨[/cyan] hotkeys: ⌘⇧S=stop, ⌃A then [c=cancel, e=extend, t=timer, 1/2/3=quick]"
+                mock_console.print.assert_called_with(expected_output)
+
+                # Test prefix activation followed by action key
+                prefix_callback = hotkeys_arg["<ctrl>+a"]
+
+                # Mock the single key listener setup to avoid actually starting it
+                with patch.object(manager, "_setup_single_key_listener"):
+                    prefix_callback()  # Activate prefix mode
+
+                # Manually set the state that would be set by the prefix activation
+                manager._waiting_for_action = True
+
+                # Simulate action key press
+                with patch("time.time", return_value=100.0):
+                    manager._on_action_key("e")  # extend
+
+                timer_callback.assert_called_once_with("extend", 10)
 
 
 class TestPermissionChecker:
@@ -318,7 +368,7 @@ class TestHotkeyIntegration:
             callback_called = True
 
         manager = HotkeyManager(stop_callback)
-        wrapper = manager._compatible_callback()
+        wrapper = manager._compatible_callback(manager._on_stop_hotkey)
 
         # test old signature (no arguments)
         callback_called = False

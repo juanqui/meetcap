@@ -1,6 +1,7 @@
 """command-line interface for meetcap"""
 
 import os
+import queue
 import signal
 import sys
 import threading
@@ -196,6 +197,11 @@ class RecordingOrchestrator:
         self.enable_memory_monitoring = config.get("memory", "enable_monitoring", False)
         self.auto_stop_minutes = None
         self.auto_stop_timer = None
+        self.auto_stop_start_time = None
+
+        # Timer control attributes
+        self.timer_lock = threading.Lock()
+        self.timer_operations_queue = queue.Queue()
 
     def run(
         self,
@@ -276,8 +282,9 @@ class RecordingOrchestrator:
             )
         )
 
-        # setup hotkey handler
-        self.hotkey_manager = HotkeyManager(self._stop_recording)
+        # setup hotkey handler with timer support
+        prefix_key = self.config.get("hotkey", "prefix", "<ctrl>+a")
+        self.hotkey_manager = HotkeyManager(self._stop_recording, self._timer_callback, prefix_key)
         hotkey_combo = self.config.get("hotkey", "stop")
 
         # setup signal handler for Ctrl-C
@@ -296,6 +303,7 @@ class RecordingOrchestrator:
 
             # If auto_stop is specified, start timer thread
             if self.auto_stop_minutes is not None and self.auto_stop_minutes > 0:
+                self.auto_stop_start_time = time.time()  # Track our own start time
                 self._start_auto_stop_timer()
 
             # show progress while recording
@@ -402,28 +410,141 @@ class RecordingOrchestrator:
         if self.recorder:
             self.recorder._stop_event.set()
 
+    def extend_timer(self, minutes: int) -> None:
+        """Extend current timer by specified minutes."""
+        self.timer_operations_queue.put(("extend", minutes))
+
+    def cancel_timer(self) -> None:
+        """Cancel the current auto-stop timer."""
+        self.timer_operations_queue.put(("cancel", None))
+
+    def set_new_timer(self, minutes: int) -> None:
+        """Set new timer duration from current time."""
+        self.timer_operations_queue.put(("set", minutes))
+
+    def get_timer_status(self) -> dict:
+        """Get current timer status information."""
+        with self.timer_lock:
+            if not self.auto_stop_minutes or not self.auto_stop_start_time:
+                return {"active": False}
+
+            elapsed = time.time() - self.auto_stop_start_time
+            total_seconds = self.auto_stop_minutes * 60
+            remaining = max(0, total_seconds - elapsed)
+
+            return {
+                "active": True,
+                "duration_minutes": self.auto_stop_minutes,
+                "elapsed_seconds": elapsed,
+                "remaining_seconds": remaining,
+                "start_time": self.auto_stop_start_time,
+            }
+
+    def _timer_callback(self, action: str, value: int = None) -> None:
+        """Handle timer-related hotkey callbacks."""
+        try:
+            if action == "extend":
+                minutes = value or 30  # Default to 30 minutes
+                self.extend_timer(minutes)
+            elif action == "cancel":
+                self.cancel_timer()
+            elif action == "menu":
+                self._show_timer_status()
+            elif action == "set":
+                minutes = value or 60  # Default to 60 minutes
+                self.set_new_timer(minutes)
+        except Exception:
+            # Silent error handling - errors don't disrupt progress display
+            pass
+
+    def _show_timer_status(self) -> None:
+        """Display current timer status in a less disruptive way."""
+        status = self.get_timer_status()
+        if not status["active"]:
+            # Just flash a brief status without disrupting the progress line too much
+            console.print("\r[dim]No timer active[/dim]", end="")
+            # Give user a moment to see it, then let progress resume
+            import threading
+
+            threading.Timer(1.0, lambda: console.print("\r", end="")).start()
+        else:
+            remaining_mins = int(status["remaining_seconds"] // 60)
+            remaining_secs = int(status["remaining_seconds"] % 60)
+            # Show brief status inline, then let progress resume
+            console.print(
+                f"\r[dim]Timer: {status['duration_minutes']}min, {remaining_mins:02d}:{remaining_secs:02d} left[/dim]",
+                end="",
+            )
+            # Give user a moment to see it, then let progress resume
+            import threading
+
+            threading.Timer(2.0, lambda: console.print("\r", end="")).start()
+
+    def _process_timer_operation(self) -> None:
+        """Process queued timer operations safely."""
+        try:
+            operation, value = self.timer_operations_queue.get_nowait()
+
+            with self.timer_lock:
+                if operation == "extend":
+                    if self.auto_stop_minutes and self.auto_stop_start_time:
+                        self.auto_stop_minutes += value
+                        # Silent operation - timer extension reflected in progress display
+                    else:
+                        # Silent - no active timer to extend
+                        pass
+
+                elif operation == "cancel":
+                    if self.auto_stop_minutes:
+                        # Silent operation - timer cancellation reflected in progress display
+                        self.auto_stop_minutes = None
+                        self.auto_stop_start_time = None
+                    else:
+                        # Silent - no active timer to cancel
+                        pass
+
+                elif operation == "set":
+                    self.auto_stop_minutes = value
+                    self.auto_stop_start_time = time.time()
+                    # Silent operation - timer setting reflected in progress display
+
+        except queue.Empty:
+            pass  # No operations to process
+        except Exception:
+            # Silent error handling - errors don't disrupt progress display
+            pass
+
     def _start_auto_stop_timer(self) -> None:
         """start background timer for automatic stopping."""
         self.auto_stop_timer = threading.Thread(target=self._auto_stop_worker, daemon=True)
         self.auto_stop_timer.start()
 
     def _auto_stop_worker(self) -> None:
-        """background worker that monitors recording time and triggers auto stop."""
+        """Enhanced background worker that monitors recording time and processes timer operations."""
         import time
 
-        if not self.auto_stop_minutes:
-            return
-
-        stop_seconds = self.auto_stop_minutes * 60
-
+        # Continue running even if no initial timer - operations may add one
         while not self.stop_event.is_set():
-            elapsed = self.recorder.get_elapsed_time()
-            if elapsed >= stop_seconds:
-                console.print(
-                    f"\n[yellow]⏱️[/yellow] automatically stopping recording after {self.auto_stop_minutes} minutes"
-                )
-                self._stop_recording()
-                break
+            # Process any pending timer operations
+            if not self.timer_operations_queue.empty():
+                self._process_timer_operation()
+
+            # Check timer status with lock for thread safety
+            with self.timer_lock:
+                if not self.auto_stop_minutes or not self.auto_stop_start_time:
+                    time.sleep(1)  # No active timer, just wait
+                    continue
+
+                elapsed = time.time() - self.auto_stop_start_time
+                stop_seconds = self.auto_stop_minutes * 60
+
+                if elapsed >= stop_seconds:
+                    console.print(
+                        f"\n[yellow]⏱️[/yellow] automatically stopping recording after {self.auto_stop_minutes} minutes"
+                    )
+                    self._stop_recording()
+                    break
+
             time.sleep(1)  # Check every second
 
     def _show_recording_progress(self) -> None:
@@ -447,19 +568,38 @@ class RecordingOrchestrator:
                 progress_str = f"[cyan]recording[/cyan] {minutes:02d}:{seconds:02d}"
 
                 # Add notes file path display
-                if self.recorder:
+                if self.recorder and self.recorder.session:
                     recording_dir = self.recorder.session.output_path.parent
                     notes_path = recording_dir / "notes.md"
                     if notes_path.exists():
                         progress_str += f" [dim]notes: {notes_path.absolute()}[/dim]"
 
-                # Add time remaining if auto-stop is active
-                if self.auto_stop_minutes and self.auto_stop_minutes > 0:
+                # Add time remaining and shortcuts if auto-stop is active
+                if (
+                    self.auto_stop_minutes
+                    and self.auto_stop_minutes > 0
+                    and self.auto_stop_start_time
+                ):
+                    # Use our independent timer for consistency
+                    auto_elapsed = time.time() - self.auto_stop_start_time
                     total_seconds = self.auto_stop_minutes * 60
-                    remaining_seconds = max(0, total_seconds - elapsed)
+                    remaining_seconds = max(0, total_seconds - auto_elapsed)
                     remaining_minutes = int(remaining_seconds // 60)
                     remaining_seconds = int(remaining_seconds % 60)
                     progress_str += f" [dim](⏱️ auto-stop in {remaining_minutes:02d}:{remaining_seconds:02d})[/dim]"
+                    # Add prefix-based timer shortcuts when timer is active
+                    prefix_display = (
+                        self.config.get("hotkey", "prefix", "<ctrl>+a")
+                        .replace("<ctrl>", "⌃")
+                        .replace("<cmd>", "⌘")
+                        .replace("<alt>", "⌥")
+                        .replace("<shift>", "⇧")
+                        .replace("+", "")
+                        .upper()
+                    )
+                    progress_str += (
+                        f" [dim]({prefix_display} then c=cancel e=extend t=menu 1/2/3=quick)[/dim]"
+                    )
                 else:
                     progress_str += f" [dim]({hotkey_str} or ⌃C to stop)[/dim]"
 
