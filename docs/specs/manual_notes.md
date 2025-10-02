@@ -302,9 +302,9 @@ When a user runs `meetcap record`, the workflow will now include:
 ```bash
 $ meetcap record
 🎙️ meeting recorder
-✓ recording started: recording.wav
+✓ recording started: recording.opus
   device: Aggregate Device (index 0)
-  format: 48000 hz, 2 channels
+  format: OPUS @ 32 kbps
 ✓ notes file created: notes.md
   path: /Users/username/Recordings/meetcap/20250910-143045-temp/notes.md
 recording 00:15:32 (⌃C or ⌘⇧S to stop)

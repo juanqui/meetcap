@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 import typer
+from rich import prompt
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -344,15 +345,27 @@ class RecordingOrchestrator:
             if self.auto_stop_timer and self.auto_stop_timer.is_alive():
                 self.auto_stop_timer.join(timeout=1.0)
 
-            # run transcription and summarization
-            self.processing_complete = False
-            self._process_recording(
-                audio_path=final_path,
-                stt_engine=stt_engine,
-                llm_path=llm_path,
-                seed=seed,
-            )
-            self.processing_complete = True
+            # prompt user for processing confirmation
+            if console.is_interactive:
+                proceed = prompt.Confirm.ask(
+                    "Proceed with transcription and summarization?", default=True
+                )
+            else:
+                proceed = True
+
+            if proceed:
+                # run transcription and summarization
+                self.processing_complete = False
+                self._process_recording(
+                    audio_path=final_path,
+                    stt_engine=stt_engine,
+                    llm_path=llm_path,
+                    seed=seed,
+                )
+                self.processing_complete = True
+            else:
+                self.processing_complete = True
+                console.print(f"Processing skipped. Audio file saved at: {final_path}")
 
         except KeyboardInterrupt:
             # handle KeyboardInterrupt based on current state
@@ -367,15 +380,27 @@ class RecordingOrchestrator:
                 console.print("\n[yellow]⏹[/yellow] stopping recording...")
                 final_path = self.recorder.stop_recording()
                 if final_path:
-                    # continue with processing
-                    self.processing_complete = False
-                    self._process_recording(
-                        audio_path=final_path,
-                        stt_engine=stt_engine,
-                        llm_path=llm_path,
-                        seed=seed,
-                    )
-                    self.processing_complete = True
+                    # prompt user for processing confirmation
+                    if console.is_interactive:
+                        proceed = prompt.Confirm.ask(
+                            "Proceed with transcription and summarization?", default=True
+                        )
+                    else:
+                        proceed = True
+
+                    if proceed:
+                        # continue with processing
+                        self.processing_complete = False
+                        self._process_recording(
+                            audio_path=final_path,
+                            stt_engine=stt_engine,
+                            llm_path=llm_path,
+                            seed=seed,
+                        )
+                        self.processing_complete = True
+                    else:
+                        self.processing_complete = True
+                        console.print(f"Processing skipped. Audio file saved at: {final_path}")
                 else:
                     console.print(
                         "\n[yellow]operation cancelled - no recording to process[/yellow]"
@@ -853,6 +878,23 @@ class RecordingOrchestrator:
                     pass
             return None
 
+    def _find_recording_file(self, recording_dir: Path) -> Path | None:
+        """
+        find the recording file in a directory, trying multiple formats.
+
+        args:
+            recording_dir: directory to search
+
+        returns:
+            path to recording file or None if not found
+        """
+        # Try each supported format
+        for extension in [".opus", ".flac", ".wav"]:
+            audio_file = recording_dir / f"recording{extension}"
+            if audio_file.exists():
+                return audio_file
+        return None
+
     def _process_recording(
         self,
         audio_path: Path,
@@ -878,7 +920,13 @@ class RecordingOrchestrator:
         if audio_path.is_dir():
             # called from recording workflow - directory-based
             recording_dir = audio_path
-            audio_file = recording_dir / "recording.wav"
+            audio_file = self._find_recording_file(recording_dir)
+            if audio_file is None:
+                console.print(
+                    f"[red]error: no recording file found in {recording_dir}[/red]\n"
+                    "[yellow]expected recording.wav, recording.opus, or recording.flac[/yellow]"
+                )
+                return
             is_recording_workflow = True
         else:
             # called from summarize command - file-based
@@ -944,8 +992,8 @@ class RecordingOrchestrator:
                 recording_dir.rename(final_dir_path)
                 console.print(f"[green]✓[/green] meeting folder: {final_dir_path.absolute()}")
 
-                # update paths to reflect new location
-                audio_file = final_dir_path / "recording.wav"
+                # update paths to reflect new location (preserve original file extension)
+                audio_file = final_dir_path / audio_file.name
                 text_path = final_dir_path / "recording.transcript.txt"
                 json_path = final_dir_path / "recording.transcript.json"
                 summary_path = final_dir_path / "recording.summary.md"
@@ -1050,11 +1098,12 @@ class RecordingOrchestrator:
             llm_model: optional llm model path override
             skip_confirm: skip confirmation prompt
         """
-        # validate recording directory
-        audio_file = recording_dir / "recording.wav"
-        if not audio_file.exists():
+        # validate recording directory - find audio file with any supported format
+        audio_file = self._find_recording_file(recording_dir)
+        if audio_file is None:
             console.print(
-                "[red]error: not a valid recording directory (missing recording.wav)[/red]"
+                "[red]error: not a valid recording directory[/red]\n"
+                "[yellow]expected recording.wav, recording.opus, or recording.flac[/yellow]"
             )
             return
 
@@ -1135,7 +1184,7 @@ class RecordingOrchestrator:
                     f"[bold]📁 recording to reprocess:[/bold] {recording_dir.name}\n"
                     f"   location: {recording_dir.absolute()}\n\n"
                     f"[bold]📋 current files:[/bold]\n"
-                    f"   • recording.wav ({audio_file.stat().st_size / 1024 / 1024:.1f} MB)\n"
+                    f"   • {audio_file.name} ({audio_file.stat().st_size / 1024 / 1024:.1f} MB)\n"
                     + (
                         f"   • recording.transcript.txt ({transcript_txt.stat().st_size / 1024:.1f} KB)\n"
                         if transcript_txt.exists()

@@ -247,7 +247,7 @@ Each recording session creates a dedicated folder with all meeting artifacts org
 ```
 ~/Recordings/meetcap/
 ├── 2025_Jan_15_TeamStandup/
-│   ├── recording.wav                 # Audio recording
+│   ├── recording.opus                # Audio recording (OPUS format, default)
 │   ├── recording.transcript.txt      # Plain text transcript
 │   ├── recording.transcript.json     # Transcript with timestamps
 │   └── recording.summary.md          # Meeting summary with AI-generated insights

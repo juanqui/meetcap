@@ -359,6 +359,108 @@ class TestAudioRecorder:
             recorder.cleanup()
             mock_stop.assert_not_called()  # should not call if no session
 
+    def test_get_minimum_file_size_wav(self, recorder, temp_dir):
+        """test minimum file size calculation for WAV format"""
+        wav_path = temp_dir / "test.wav"
+        min_size = recorder._get_minimum_file_size(wav_path)
+        assert min_size == 44  # WAV header size
+
+    def test_get_minimum_file_size_opus(self, recorder, temp_dir):
+        """test minimum file size calculation for OPUS format"""
+        opus_path = temp_dir / "test.opus"
+        min_size = recorder._get_minimum_file_size(opus_path)
+        assert min_size == 100  # Ogg+Opus headers + minimal packet
+
+    def test_get_minimum_file_size_flac(self, recorder, temp_dir):
+        """test minimum file size calculation for FLAC format"""
+        flac_path = temp_dir / "test.flac"
+        min_size = recorder._get_minimum_file_size(flac_path)
+        assert min_size == 100  # FLAC headers + minimal frame
+
+    def test_get_minimum_file_size_unknown(self, recorder, temp_dir):
+        """test minimum file size calculation for unknown format"""
+        unknown_path = temp_dir / "test.mp3"
+        min_size = recorder._get_minimum_file_size(unknown_path)
+        assert min_size == 44  # defaults to WAV size
+
+    def test_stop_recording_opus_file_too_small(self, recorder, temp_dir):
+        """test handling of OPUS file that's too small"""
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_process.stdin = Mock()
+        mock_process.wait.return_value = None
+
+        output_file = temp_dir / "test.opus"
+        output_file.write_bytes(b"x" * 50)  # too small (< 100 bytes for OPUS)
+
+        recorder.session = RecordingSession(
+            process=mock_process,
+            output_path=output_file,
+            start_time=time.time(),
+            device_name="Test",
+            sample_rate=48000,
+            channels=2,
+        )
+
+        with patch("meetcap.core.recorder.console") as mock_console:
+            result = recorder.stop_recording()
+
+            assert result is None
+            assert not output_file.exists()  # should be deleted
+            mock_console.print.assert_called_with(
+                "[yellow]⚠[/yellow] recording file is empty or corrupted"
+            )
+
+    def test_stop_recording_opus_file_valid(self, recorder, temp_dir):
+        """test successful OPUS file with valid size"""
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_process.stdin = Mock()
+        mock_process.wait.return_value = None
+
+        output_file = temp_dir / "test.opus"
+        output_file.write_bytes(b"x" * 150)  # valid size (> 100 bytes for OPUS)
+
+        recorder.session = RecordingSession(
+            process=mock_process,
+            output_path=output_file,
+            start_time=time.time() - 10,
+            device_name="Test",
+            sample_rate=48000,
+            channels=2,
+        )
+
+        result = recorder.stop_recording()
+
+        assert result == output_file.parent
+        assert recorder.session is None
+        assert output_file.exists()  # should not be deleted
+
+    def test_stop_recording_flac_file_valid(self, recorder, temp_dir):
+        """test successful FLAC file with valid size"""
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_process.stdin = Mock()
+        mock_process.wait.return_value = None
+
+        output_file = temp_dir / "test.flac"
+        output_file.write_bytes(b"x" * 120)  # valid size (> 100 bytes for FLAC)
+
+        recorder.session = RecordingSession(
+            process=mock_process,
+            output_path=output_file,
+            start_time=time.time() - 5,
+            device_name="Test",
+            sample_rate=48000,
+            channels=2,
+        )
+
+        result = recorder.stop_recording()
+
+        assert result == output_file.parent
+        assert recorder.session is None
+        assert output_file.exists()  # should not be deleted
+
 
 class TestRecorderIntegration:
     """integration tests for recorder functionality"""

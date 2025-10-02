@@ -63,6 +63,32 @@ class AudioRecorder:
         }
         return extension_map.get(audio_format, ".wav")
 
+    def _get_minimum_file_size(self, output_path: Path) -> int:
+        """
+        Get minimum valid file size based on audio format.
+
+        args:
+            output_path: path to the audio file
+
+        returns:
+            minimum file size in bytes for the format
+        """
+        extension = output_path.suffix.lower()
+
+        # Format-specific minimum sizes:
+        # - WAV: 44-byte header + at least some audio data
+        # - OPUS: Ogg container (~27 bytes) + OpusHead (~19 bytes) + OpusTags (variable, ~30+ bytes)
+        #         + at least one audio packet (~20+ bytes) = ~100 bytes minimum
+        # - FLAC: "fLaC" marker (4 bytes) + STREAMINFO block (38 bytes) + at least one frame (~20+ bytes)
+        #         = ~100 bytes minimum
+        size_map = {
+            ".wav": 44,  # WAV header only
+            ".opus": 100,  # Ogg+Opus headers + minimal audio packet
+            ".flac": 100,  # FLAC headers + minimal frame
+        }
+
+        return size_map.get(extension, 44)  # default to WAV size for unknown formats
+
     def _build_ffmpeg_command(
         self,
         device_index: int,
@@ -92,7 +118,6 @@ class AudioRecorder:
         cmd = [
             "ffmpeg",
             "-hide_banner",
-            "-nostdin",
             "-f",
             "avfoundation",
         ]
@@ -480,8 +505,11 @@ class AudioRecorder:
                     process.kill()
                     process.wait(timeout=1)
 
-            # check if file was created
-            if output_path.exists() and output_path.stat().st_size > 44:  # wav header is 44 bytes
+            # determine minimum file size based on format
+            min_size = self._get_minimum_file_size(output_path)
+
+            # check if file was created and meets minimum size
+            if output_path.exists() and output_path.stat().st_size > min_size:
                 duration = time.time() - self.session.start_time
                 console.print(
                     f"[green]✓[/green] recording saved: {output_path.name} ({duration:.1f} seconds)"

@@ -187,7 +187,7 @@ Recordings are organized by date and AI-generated title:
 ```
 ~/Recordings/meetcap/
 ├── 2025_Jan_15_TeamStandup/
-│   ├── recording.wav              # Raw audio
+│   ├── recording.opus             # Audio (OPUS format, default)
 │   ├── recording.transcript.txt   # Plain text
 │   ├── recording.transcript.json  # With timestamps
 │   └── recording.summary.md       # AI summary
