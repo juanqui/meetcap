@@ -736,8 +736,9 @@ class VoskTranscriptionService(TranscriptionService):
             import vosk
 
             # check if we need to convert the audio format
-            # vosk (via soundfile) only supports WAV, FLAC, OGG, etc. - not M4A/MP4
-            supported_extensions = {".wav", ".flac", ".ogg", ".opus", ".raw"}
+            # vosk (via soundfile) only supports WAV, FLAC, OGG - not OPUS, M4A/MP4
+            # Opus files need conversion even though extension is supported by soundfile
+            supported_extensions = {".wav", ".flac", ".ogg", ".raw"}
             needs_conversion = audio_path.suffix.lower() not in supported_extensions
 
             audio_to_process = audio_path

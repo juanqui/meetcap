@@ -1,46 +1,59 @@
-# Canary-Qwen2.5B STT Integration Specification
+# ONNX STT Integration Specification
 
-**Document**: NVIDIA Canary-Qwen2.5B Speech-to-Text Integration
-**Version**: 1.0
+**Document**: ONNX Speech-to-Text Integration for Superior Accuracy
+**Version**: 2.1
 **Last Updated**: September 20, 2025
 **Author**: meetcap development team
 
+## ⚠️ IMPORTANT CLARIFICATION ABOUT CANARY MODELS
+
+**Investigation Results:**
+
+- **`onnx-community/canary-qwen-2.5b-ONNX` DOES exist** on HuggingFace Hub
+- **However, it is NOT a speech-to-text model** - it's a `Qwen3ForCausalLM` text generation model
+- **The "canary" name is misleading** - this repository contains a language model, not an ASR model
+- **The original NVIDIA Canary models** (`NVIDIA/canary-1b`) ARE legitimate ASR models but use NeMo format, not ONNX
+
+**Updated Approach:**
+This specification has been updated to focus on **legitimate ONNX STT models** that provide actual speech recognition capabilities, including Whisper variants, Distil-Whisper, Moonshine, Parakeet TDT, and Sherpa-ONNX models.
+
 ## 1. Executive Summary
 
-This specification defines the integration of NVIDIA's Canary-Qwen2.5B as a superior alternative to Whisper for meeting transcription in meetcap. Canary-Qwen2.5B offers 5.63% WER (vs Whisper's ~7-12%), 418x real-time factor performance, and built-in LLM capabilities for meeting analysis.
+This specification defines the integration of ONNX-based speech-to-text models as superior alternatives to Whisper for meeting transcription in meetcap. The focus is on local, efficient ONNX inference with support for multiple high-accuracy STT models through a generic ONNX service architecture.
 
 ### 1.1 Key Benefits
 
-- **Superior Accuracy**: 5.63% WER vs Whisper's 7-12% WER, especially for proper names
-- **Dual Mode Operation**: ASR-only mode + LLM mode for summarization
-- **Meeting Optimization**: Designed specifically for business conversation scenarios
-- **Extended Context**: Up to 2 hours of audio processing context
-- **Built-in Intelligence**: No separate LLM required for basic summarization
+- **Superior Performance**: ONNX Runtime optimization provides faster inference, especially on Apple Silicon
+- **Model Flexibility**: Generic architecture supports swapping different ONNX STT models without code changes
+- **Local Processing**: 100% offline processing with no cloud dependencies
+- **Memory Efficiency**: Quantized ONNX models (INT8/INT4) require significantly less RAM
+- **Cross-Platform**: Consistent performance across different hardware architectures
+- **Future-Proof**: Easy integration of new ONNX STT models as they become available
 
-### 1.2 Implementation Challenges
+### 1.2 ONNX-First Approach Advantages
 
-- **Platform Limitations**: Optimized for NVIDIA GPU, significant challenges on Apple Silicon
-- **Complex Dependencies**: Requires NVIDIA NeMo framework and PyTorch 2.6+
-- **Large Model Size**: 2.5B parameters requiring 10+ GB storage and memory
-- **macOS Compatibility**: Limited native support, requires alternative deployment strategies
+- **Hardware Acceleration**: Native support for Apple Silicon Neural Engine via CoreML
+- **Smaller Memory Footprint**: Quantized models use 20-30% less RAM than PyTorch equivalents
+- **Faster Inference**: ONNX Runtime optimizations provide significant speed improvements
+- **No Complex Dependencies**: Eliminates need for large ML frameworks in production
+- **Model Portability**: Same model files work across different deployment environments
 
 ## 2. Technical Architecture
 
-### 2.1 Service Integration Pattern
+### 2.1 Generic ONNX STT Service Pattern
 
-Canary-Qwen2.5B will integrate following the established `TranscriptionService` pattern:
+The ONNX STT integration follows the established `TranscriptionService` pattern with model-agnostic design:
 
 ```python
-class CanaryQwenService(TranscriptionService):
-    """Transcription using NVIDIA Canary-Qwen2.5B model"""
+class ONNXSTTService(TranscriptionService):
+    """Generic ONNX-based speech-to-text service"""
 
     def __init__(
         self,
-        model_name: str = "nvidia/canary-qwen-2.5b",
-        model_path: str | None = None,
-        device: str = "auto",
-        mode: str = "asr",  # "asr" or "llm"
-        language: str | None = None,
+        model_path: str | Path,
+        model_config: dict | None = None,
+        providers: list[str] | None = None,  # ONNX execution providers
+        audio_sample_rate: int = 16000,
         auto_download: bool = True,
     ):
         # Implementation details
@@ -48,72 +61,79 @@ class CanaryQwenService(TranscriptionService):
     def transcribe(self, audio_path: Path) -> TranscriptResult:
         # Return standard TranscriptResult with segments
 
-    def analyze_meeting(self, transcript: str, prompt: str = None) -> str:
-        # LLM mode for meeting analysis
-
     def load_model(self) -> None:
-        # Load NeMo model
+        # Load ONNX model with specified providers
 
     def unload_model(self) -> None:
-        # Cleanup NeMo model and GPU memory
+        # Cleanup ONNX session and memory
 ```
 
-### 2.2 Deployment Strategy
+### 2.2 Supported ONNX STT Models
 
-Due to Apple Silicon limitations, the implementation will support multiple deployment modes:
+Curated list of verified, high-quality ONNX STT models:
 
-1. **Cloud Deployment** (Primary): API-based inference for optimal performance
-2. **Fallback Integration**: Automatic fallback to Whisper on incompatible systems
-3. **Future Native**: Placeholder for future Apple Silicon optimizations
+1. **Whisper ONNX** (`onnx-community/whisper-large-v3-ONNX`): OpenAI Whisper Large v3 in ONNX format
+2. **Distil-Whisper** (`distil-whisper/distil-large-v3`): Faster, lighter Whisper variant with ONNX support
+3. **Moonshine** (`UsefulSensors/moonshine`): Efficient on-device STT optimized for edge deployment
+4. **Parakeet TDT** (`istupakov/parakeet-tdt-0.6b-v3-onnx`): NVIDIA multilingual transformer model
+5. **Sherpa-ONNX Whisper Models**: Optimized Whisper models for streaming STT
+   - `csukuangfj/sherpa-onnx-whisper-tiny.en` (fastest)
+   - `csukuangfj/sherpa-onnx-whisper-base.en` (lightweight)
+   - `csukuangfj/sherpa-onnx-whisper-small.en` (balanced)
 
-### 2.3 Model Management
+All models are **verified ASR models** with proper speech recognition capabilities, unlike the misleading `canary-qwen-2.5b-ONNX` which is a text generation model.
 
-The service will implement sophisticated model management:
+### 2.3 ONNX Runtime Optimization
 
-- **Automatic Detection**: Hardware capability detection and optimal deployment selection
-- **Graceful Degradation**: Seamless fallback to Whisper when Canary unavailable
-- **Cloud Integration**: Optional cloud API usage for better performance
-- **Local Caching**: Model artifacts cached for offline scenarios when possible
+The service will leverage ONNX Runtime's hardware-specific optimizations:
+
+- **Apple Silicon**: CoreML ExecutionProvider for Neural Engine acceleration
+- **CPU Optimization**: Quantized models (INT8/INT4) for memory efficiency
+- **Cross-Platform**: Consistent interface across different hardware
+- **Provider Selection**: Automatic selection of optimal execution providers
 
 ## 3. Implementation Plan
 
-### 3.1 Phase 1: Cloud API Integration (Primary Path)
+### 3.1 Phase 1: Generic ONNX STT Service (Primary Path)
 
-**Rationale**: Given Apple Silicon limitations and complex dependencies, initial implementation will focus on cloud API integration using services like Replicate or Hugging Face Inference API.
+**Rationale**: ONNX models provide optimal balance of accuracy, performance, and local deployment. The generic architecture allows easy model swapping and future upgrades.
 
-#### 3.1.1 Cloud Service Implementation
+#### 3.1.1 Core ONNX Service Implementation
 
 ```python
-class CanaryQwenCloudService(TranscriptionService):
-    """Cloud-based Canary-Qwen2.5B service via API"""
+class ONNXSTTService(TranscriptionService):
+    """Generic ONNX-based speech-to-text service"""
 
     def __init__(
         self,
-        api_provider: str = "replicate",  # "replicate", "hf_inference"
-        api_key: str | None = None,
+        model_path: str | Path,
+        model_config: ONNXModelConfig,
+        providers: list[str] | None = None,
         fallback_service: TranscriptionService | None = None,
     ):
-        self.api_provider = api_provider
-        self.api_key = api_key or os.getenv(f"{api_provider.upper()}_API_KEY")
-        self.fallback_service = fallback_service or self._create_whisper_fallback()
+        self.model_path = Path(model_path)
+        self.model_config = model_config
+        self.providers = providers or self._get_optimal_providers()
+        self.fallback_service = fallback_service
+        self.session = None
+        self.tokenizer = None
 
     def transcribe(self, audio_path: Path) -> TranscriptResult:
         try:
-            return self._transcribe_cloud(audio_path)
+            return self._transcribe_onnx(audio_path)
         except Exception as e:
-            console.print(f"[yellow]Canary cloud API failed: {e}[/yellow]")
-            console.print("[cyan]Falling back to Whisper...[/cyan]")
-            return self.fallback_service.transcribe(audio_path)
+            console.print(f"[yellow]ONNX STT failed: {e}[/yellow]")
+            if self.fallback_service:
+                console.print("[cyan]Falling back to Whisper...[/cyan]")
+                return self.fallback_service.transcribe(audio_path)
+            raise
 
-    def _transcribe_cloud(self, audio_path: Path) -> TranscriptResult:
-        # Implementation for cloud API calls
-        if self.api_provider == "replicate":
-            return self._transcribe_replicate(audio_path)
-        elif self.api_provider == "hf_inference":
-            return self._transcribe_huggingface(audio_path)
-
-    def analyze_meeting(self, transcript: str, prompt: str = None) -> str:
-        # Use LLM capabilities via cloud API
+    def _transcribe_onnx(self, audio_path: Path) -> TranscriptResult:
+        # Generic ONNX inference pipeline
+        audio_features = self._preprocess_audio(audio_path)
+        tokens = self._run_inference(audio_features)
+        text = self._decode_tokens(tokens)
+        return self._create_transcript_result(text, audio_path)
 ```
 
 #### 3.1.2 Configuration Integration
@@ -289,21 +309,78 @@ class CanaryMeetingAnalyzer:
         pass
 ```
 
-## 4. Model Download and Management
+## 4. ONNX Model Management
 
-### 4.1 Cloud-First Approach
+### 4.1 Automatic Model Download
 
-For the primary cloud deployment, no local model downloads are required. The service will:
+The ONNX STT service will support automatic model downloads from HuggingFace:
 
-1. **Validate API Access**: Check API keys and service availability
-2. **Test Connectivity**: Perform lightweight API test calls
-3. **Configure Fallback**: Ensure Whisper models are available as fallback
+```python
+def ensure_onnx_model(
+    model_id: str,
+    filename: str,
+    models_dir: Path | None = None,
+    force_download: bool = False,
+) -> Path:
+    """Download ONNX model from HuggingFace if not present locally"""
 
-### 4.2 Future Local Model Management
+    if models_dir is None:
+        models_dir = Path.home() / ".meetcap" / "models" / "onnx"
 
-For future native deployment:
+    models_dir.mkdir(parents=True, exist_ok=True)
+    model_path = models_dir / f"{model_id.replace('/', '--')}--{filename}"
 
-#### 4.2.1 NeMo Model Download System
+    if model_path.exists() and not force_download:
+        return model_path
+
+    console.print(f"[cyan]Downloading ONNX model: {model_id}/{filename}[/cyan]")
+
+    from huggingface_hub import hf_hub_download
+
+    downloaded_path = hf_hub_download(
+        repo_id=model_id,
+        filename=filename,
+        cache_dir=str(models_dir.parent / "cache"),
+        local_files_only=False,
+    )
+
+    # Create symlink or copy to expected location
+    import shutil
+    shutil.copy2(downloaded_path, model_path)
+
+    console.print(f"[green]✓[/green] ONNX model downloaded: {model_path}")
+    return model_path
+```
+
+### 4.2 Supported Model Configurations
+
+Initial model support with automatic download:
+
+```python
+ONNX_MODELS = {
+    "whisper-large-v3": {
+        "repo_id": "onnx-community/whisper-large-v3-onnx",
+        "filename": "model.onnx",
+        "tokenizer_repo": "openai/whisper-large-v3",
+        "sample_rate": 16000,
+        "description": "OpenAI Whisper Large v3 (high accuracy)"
+    },
+    "whisper-medium": {
+        "repo_id": "onnx-community/whisper-medium-onnx",
+        "filename": "model.onnx",
+        "tokenizer_repo": "openai/whisper-medium",
+        "sample_rate": 16000,
+        "description": "OpenAI Whisper Medium (balanced)"
+    },
+    "whisper-small": {
+        "repo_id": "onnx-community/whisper-small-onnx",
+        "filename": "model.onnx",
+        "tokenizer_repo": "openai/whisper-small",
+        "sample_rate": 16000,
+        "description": "OpenAI Whisper Small (lightweight)"
+    }
+}
+```
 
 ```python
 def ensure_canary_model(

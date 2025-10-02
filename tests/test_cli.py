@@ -347,8 +347,21 @@ class TestCLICommands:
         """test record command"""
         with patch("meetcap.cli.Config") as mock_config_class:
             mock_config = Mock()
-            # Mock get method to return proper default values
-            mock_config.get.return_value = 0
+
+            # Mock get method to return proper default values based on section/key
+            def mock_get(section, key, default=None):
+                if section == "audio":
+                    if key == "format":
+                        return "opus"
+                    elif key == "opus_bitrate":
+                        return 32
+                    elif key == "flac_compression_level":
+                        return 5
+                elif section == "recording" and key == "default_auto_stop":
+                    return 0
+                return default
+
+            mock_config.get.side_effect = mock_get
             mock_config_class.return_value = mock_config
 
             with patch("meetcap.cli.RecordingOrchestrator") as mock_orch_class:
@@ -374,8 +387,21 @@ class TestCLICommands:
         """test record command with all options"""
         with patch("meetcap.cli.Config") as mock_config_class:
             mock_config = Mock()
-            # Mock get method to return proper default values
-            mock_config.get.return_value = 0
+
+            # Mock get method to return proper default values based on section/key
+            def mock_get(section, key, default=None):
+                if section == "audio":
+                    if key == "format":
+                        return "opus"
+                    elif key == "opus_bitrate":
+                        return 32
+                    elif key == "flac_compression_level":
+                        return 5
+                elif section == "recording" and key == "default_auto_stop":
+                    return 0
+                return default
+
+            mock_config.get.side_effect = mock_get
             mock_config_class.return_value = mock_config
 
             with patch("meetcap.cli.RecordingOrchestrator") as mock_orch_class:
@@ -1009,6 +1035,21 @@ class TestReprocessCommand:
         """test record command with auto stop option"""
         with patch("meetcap.cli.Config") as mock_config_class:
             mock_config = Mock()
+
+            # Mock get method to return proper default values based on section/key
+            def mock_get(section, key, default=None):
+                if section == "audio":
+                    if key == "format":
+                        return "opus"
+                    elif key == "opus_bitrate":
+                        return 32
+                    elif key == "flac_compression_level":
+                        return 5
+                elif section == "recording" and key == "default_auto_stop":
+                    return 0
+                return default
+
+            mock_config.get.side_effect = mock_get
             mock_config_class.return_value = mock_config
 
             with patch("meetcap.cli.RecordingOrchestrator") as mock_orch_class:
@@ -1042,8 +1083,21 @@ class TestReprocessCommand:
         """test record command getting auto stop from config"""
         with patch("meetcap.cli.Config") as mock_config_class:
             mock_config = Mock()
-            # Mock config to return default_auto_stop = 60
-            mock_config.get.return_value = 60
+
+            # Mock get method to return proper values based on section/key
+            def mock_get(section, key, default=None):
+                if section == "audio":
+                    if key == "format":
+                        return "opus"
+                    elif key == "opus_bitrate":
+                        return 32
+                    elif key == "flac_compression_level":
+                        return 5
+                elif section == "recording" and key == "default_auto_stop":
+                    return 60  # Return 60 for this test
+                return default
+
+            mock_config.get.side_effect = mock_get
             mock_config_class.return_value = mock_config
 
             with patch("meetcap.cli.RecordingOrchestrator") as mock_orch_class:

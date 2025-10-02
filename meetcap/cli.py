@@ -213,6 +213,9 @@ class RecordingOrchestrator:
         llm_path: str | None = None,
         seed: int | None = None,
         auto_stop: int | None = None,
+        audio_format: str | None = None,
+        opus_bitrate: int | None = None,
+        flac_compression: int | None = None,
     ) -> None:
         """
         run the complete recording workflow.
@@ -226,6 +229,9 @@ class RecordingOrchestrator:
             llm_path: path to llm model
             seed: random seed for llm
             auto_stop: minutes after which to automatically stop recording
+            audio_format: recording format (wav/opus/flac)
+            opus_bitrate: opus bitrate in kbps
+            flac_compression: flac compression level (0-8)
         """
         # Store auto_stop_minutes for timer functionality
         self.auto_stop_minutes = auto_stop
@@ -238,6 +244,23 @@ class RecordingOrchestrator:
 
         sample_rate = sample_rate or self.config.get("audio", "sample_rate")
         channels = channels or self.config.get("audio", "channels")
+
+        # Get audio format from config if not specified
+        if audio_format is None:
+            audio_format = self.config.get("audio", "format", "wav")
+        if opus_bitrate is None:
+            opus_bitrate = self.config.get("audio", "opus_bitrate", 32)
+        if flac_compression is None:
+            flac_compression = self.config.get("audio", "flac_compression_level", 5)
+
+        # Convert string format to AudioFormat enum
+        from meetcap.utils.config import AudioFormat
+
+        try:
+            format_enum = AudioFormat(audio_format.lower())
+        except ValueError:
+            console.print(f"[yellow]warning: invalid format '{audio_format}', using WAV[/yellow]")
+            format_enum = AudioFormat.WAV
 
         # initialize recorder
         self.recorder = AudioRecorder(
@@ -295,6 +318,9 @@ class RecordingOrchestrator:
             self.recorder.start_recording(
                 device_index=selected_device.index,
                 device_name=selected_device.name,
+                audio_format=format_enum,
+                opus_bitrate=opus_bitrate,
+                flac_compression=flac_compression,
             )
 
             # start hotkey listener
@@ -1267,6 +1293,22 @@ def record(
         "--auto-stop",
         help="auto stop recording after minutes (30, 60, 90, 120)",
     ),
+    audio_format: str | None = typer.Option(
+        None,
+        "--format",
+        "-f",
+        help="audio format: wav, opus, or flac (default from config)",
+    ),
+    opus_bitrate: int | None = typer.Option(
+        None,
+        "--opus-bitrate",
+        help="opus bitrate in kbps (6-510), default optimized for voice",
+    ),
+    flac_compression: int | None = typer.Option(
+        None,
+        "--flac-compression",
+        help="flac compression level (0-8), higher = smaller file",
+    ),
 ) -> None:
     """start recording a meeting with optional scheduled stop"""
 
@@ -1319,6 +1361,37 @@ def record(
         console.print(f"[red]error: invalid auto-stop time {auto_stop} minutes[/red]")
         console.print("[yellow]supported values: 0, 30, 60, 90, 120[/yellow]")
         raise typer.Exit(1)
+
+    # Load audio format settings from config if not provided via CLI
+    if audio_format is None:
+        audio_format = config.get("audio", "format", "opus")
+    if opus_bitrate is None:
+        opus_bitrate = config.get("audio", "opus_bitrate", 32)
+    if flac_compression is None:
+        flac_compression = config.get("audio", "flac_compression_level", 5)
+
+    # Validate audio format
+    audio_format_lower = audio_format.lower()
+    if audio_format_lower not in ["wav", "opus", "flac"]:
+        console.print(f"[red]error: invalid audio format '{audio_format}'[/red]")
+        console.print("[yellow]supported formats: wav, opus, flac[/yellow]")
+        raise typer.Exit(1)
+
+    # Validate opus bitrate
+    if audio_format_lower == "opus":
+        if not 6 <= opus_bitrate <= 510:
+            console.print(
+                f"[red]error: opus bitrate must be between 6-510 kbps (got {opus_bitrate})[/red]"
+            )
+            raise typer.Exit(1)
+
+    # Validate flac compression
+    if audio_format_lower == "flac":
+        if not 0 <= flac_compression <= 8:
+            console.print(
+                f"[red]error: flac compression level must be between 0-8 (got {flac_compression})[/red]"
+            )
+            raise typer.Exit(1)
     # setup logging
     if log_file:
         logger.add_file_handler(Path(log_file))
@@ -1338,6 +1411,9 @@ def record(
             llm_path=llm,
             seed=seed,
             auto_stop=auto_stop,
+            audio_format=audio_format_lower,
+            opus_bitrate=opus_bitrate,
+            flac_compression=flac_compression,
         )
     except KeyboardInterrupt:
         # suppress Typer's "Aborted!" message for KeyboardInterrupt

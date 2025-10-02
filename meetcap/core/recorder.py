@@ -9,6 +9,8 @@ from pathlib import Path
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
+from meetcap.utils.config import AudioFormat
+
 console = Console()
 
 
@@ -52,11 +54,159 @@ class AudioRecorder:
         self.session: RecordingSession | None = None
         self._stop_event = threading.Event()
 
+    def _get_file_extension(self, audio_format: AudioFormat) -> str:
+        """Get file extension for audio format."""
+        extension_map = {
+            AudioFormat.WAV: ".wav",
+            AudioFormat.OPUS: ".opus",
+            AudioFormat.FLAC: ".flac",
+        }
+        return extension_map.get(audio_format, ".wav")
+
+    def _build_ffmpeg_command(
+        self,
+        device_index: int,
+        output_path: Path,
+        audio_format: AudioFormat = AudioFormat.WAV,
+        opus_bitrate: int = 32,
+        flac_compression: int = 5,
+        dual_input: bool = False,
+        mic_index: int | None = None,
+    ) -> list[str]:
+        """
+        Build ffmpeg command with format-specific encoding options.
+
+        Args:
+            device_index: AVFoundation device index (or blackhole for dual)
+            output_path: Output file path (extension determines container)
+            audio_format: Target audio format (wav/opus/flac)
+            opus_bitrate: Bitrate in kbps for Opus encoding
+            flac_compression: Compression level (0-8) for FLAC
+            dual_input: Whether this is a dual input recording
+            mic_index: Microphone device index (for dual input)
+
+        Returns:
+            Complete ffmpeg command as list of strings
+        """
+        # Base command for input
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-nostdin",
+            "-f",
+            "avfoundation",
+        ]
+
+        if dual_input and mic_index is not None:
+            # Dual input with amix filter
+            cmd.extend(["-i", f":{device_index}", "-f", "avfoundation", "-i", f":{mic_index}"])
+            cmd.extend(
+                [
+                    "-filter_complex",
+                    "amix=inputs=2:duration=longest:normalize=0",
+                ]
+            )
+        else:
+            # Single input
+            cmd.extend(["-i", f":{device_index}"])
+
+        # Add format-specific encoding options
+        if audio_format == AudioFormat.OPUS:
+            cmd.extend(
+                [
+                    "-ar",
+                    str(self.sample_rate),  # Set sample rate
+                    "-ac",
+                    str(self.channels),  # Force to stereo/mono (fixes 2.1 channel issue)
+                    "-c:a",
+                    "libopus",
+                    "-b:a",
+                    f"{opus_bitrate}k",
+                    "-vbr",
+                    "on",  # Variable bitrate for better quality
+                    "-application",
+                    "voip",  # Optimize for speech
+                    "-frame_duration",
+                    "20",  # 20ms frames for low latency
+                ]
+            )
+        elif audio_format == AudioFormat.FLAC:
+            cmd.extend(
+                [
+                    "-ar",
+                    str(self.sample_rate),  # Set sample rate
+                    "-ac",
+                    str(self.channels),  # Force to stereo/mono
+                    "-c:a",
+                    "flac",
+                    "-compression_level",
+                    str(flac_compression),
+                ]
+            )
+        else:  # WAV (PCM)
+            cmd.extend(
+                [
+                    "-c:a",
+                    "pcm_s16le",
+                    "-ar",
+                    str(self.sample_rate),
+                    "-ac",
+                    str(self.channels),
+                ]
+            )
+
+        cmd.append(str(output_path))
+        return cmd
+
+    def _verify_codec_support(self, audio_format: AudioFormat) -> tuple[bool, str]:
+        """
+        Verify that ffmpeg supports the requested codec.
+
+        Args:
+            audio_format: Audio format to verify
+
+        Returns:
+            Tuple of (is_supported, error_message)
+        """
+        if audio_format == AudioFormat.WAV:
+            return True, ""  # PCM always supported
+
+        codec_map = {
+            AudioFormat.OPUS: "libopus",
+            AudioFormat.FLAC: "flac",
+        }
+
+        codec_name = codec_map.get(audio_format)
+        if not codec_name:
+            return False, f"Unknown audio format: {audio_format}"
+
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-codecs"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            # Check if codec is in the output
+            if codec_name.lower() in result.stdout.lower():
+                return True, ""
+            else:
+                return False, f"ffmpeg does not support {codec_name} codec"
+        except subprocess.TimeoutExpired:
+            return False, "ffmpeg codec check timed out"
+        except FileNotFoundError:
+            return False, "ffmpeg not found in PATH"
+        except Exception as e:
+            return False, f"Failed to verify codec support: {e}"
+
     def start_recording(
         self,
         device_index: int,
         device_name: str = "Unknown Device",
         output_path: Path | None = None,
+        audio_format: AudioFormat = AudioFormat.WAV,
+        opus_bitrate: int = 32,
+        flac_compression: int = 5,
     ) -> Path:
         """
         start recording from specified device.
@@ -65,6 +215,9 @@ class AudioRecorder:
             device_index: avfoundation device index
             device_name: human-readable device name
             output_path: optional custom output path
+            audio_format: recording format (wav/opus/flac)
+            opus_bitrate: bitrate for opus encoding (kbps)
+            flac_compression: compression level for flac (0-8)
 
         returns:
             path to the recording directory (not the file)
@@ -75,34 +228,36 @@ class AudioRecorder:
         if self.session is not None:
             raise RuntimeError("recording already in progress")
 
+        # Verify codec support and fallback to WAV if needed
+        original_format = audio_format
+        is_supported, error_msg = self._verify_codec_support(audio_format)
+        if not is_supported:
+            console.print(f"[yellow]⚠[/yellow] {error_msg}, falling back to WAV format")
+            audio_format = AudioFormat.WAV
+
+        # Get appropriate file extension
+        file_extension = self._get_file_extension(audio_format)
+
         # generate output directory and filename if not provided
         if output_path is None:
             timestamp = time.strftime("%Y%m%d-%H%M%S")
             # create temporary directory for this recording session
             recording_dir = self.output_dir / f"{timestamp}-temp"
             recording_dir.mkdir(parents=True, exist_ok=True)
-            output_path = recording_dir / "recording.wav"
+            output_path = recording_dir / f"recording{file_extension}"
         else:
             # for custom output paths, recording_dir is the parent directory
             recording_dir = output_path.parent
 
-        # build ffmpeg command for single aggregate input
-        cmd = [
-            "ffmpeg",
-            "-hide_banner",
-            "-nostdin",
-            "-f",
-            "avfoundation",
-            "-i",
-            f":{device_index}",
-            "-ac",
-            str(self.channels),
-            "-ar",
-            str(self.sample_rate),
-            "-c:a",
-            "pcm_s16le",
-            str(output_path),
-        ]
+        # build ffmpeg command using helper method
+        cmd = self._build_ffmpeg_command(
+            device_index=device_index,
+            output_path=output_path,
+            audio_format=audio_format,
+            opus_bitrate=opus_bitrate,
+            flac_compression=flac_compression,
+            dual_input=False,
+        )
 
         try:
             # start ffmpeg process
@@ -143,9 +298,23 @@ class AudioRecorder:
             except Exception as e:
                 console.print(f"[yellow]⚠[/yellow] could not create notes file: {e}")
 
+            # Display format info
+            format_info = f"{audio_format.value.upper()}"
+            if audio_format == AudioFormat.OPUS:
+                format_info += f" @ {opus_bitrate} kbps"
+            elif audio_format == AudioFormat.FLAC:
+                format_info += f" (compression: {flac_compression})"
+            else:
+                format_info += f" @ {self.sample_rate} Hz, {self.channels} ch"
+
             console.print(f"[green]✓[/green] recording started: {output_path.name}")
             console.print(f"  device: {device_name} (index {device_index})")
-            console.print(f"  format: {self.sample_rate} hz, {self.channels} channels")
+            console.print(f"  format: {format_info}")
+
+            if original_format != audio_format:
+                console.print(
+                    f"  [dim](fallback from {original_format.value} to {audio_format.value})[/dim]"
+                )
 
             # return the directory path, not the file path
             return output_path.parent
@@ -161,6 +330,9 @@ class AudioRecorder:
         blackhole_index: int,
         mic_index: int,
         output_path: Path | None = None,
+        audio_format: AudioFormat = AudioFormat.WAV,
+        opus_bitrate: int = 32,
+        flac_compression: int = 5,
     ) -> Path:
         """
         start recording from two devices with amix filter.
@@ -169,6 +341,9 @@ class AudioRecorder:
             blackhole_index: blackhole device index
             mic_index: microphone device index
             output_path: optional custom output path
+            audio_format: recording format (wav/opus/flac)
+            opus_bitrate: bitrate for opus encoding (kbps)
+            flac_compression: compression level for flac (0-8)
 
         returns:
             path to the recording directory (not the file)
@@ -179,38 +354,37 @@ class AudioRecorder:
         if self.session is not None:
             raise RuntimeError("recording already in progress")
 
+        # Verify codec support and fallback to WAV if needed
+        original_format = audio_format
+        is_supported, error_msg = self._verify_codec_support(audio_format)
+        if not is_supported:
+            console.print(f"[yellow]⚠[/yellow] {error_msg}, falling back to WAV format")
+            audio_format = AudioFormat.WAV
+
+        # Get appropriate file extension
+        file_extension = self._get_file_extension(audio_format)
+
         # generate output directory and filename if not provided
         if output_path is None:
             timestamp = time.strftime("%Y%m%d-%H%M%S")
             # create temporary directory for this recording session
             recording_dir = self.output_dir / f"{timestamp}-temp"
             recording_dir.mkdir(parents=True, exist_ok=True)
-            output_path = recording_dir / "recording.wav"
+            output_path = recording_dir / f"recording{file_extension}"
         else:
             # for custom output paths, recording_dir is the parent directory
             recording_dir = output_path.parent
 
-        # build ffmpeg command for dual input with amix
-        cmd = [
-            "ffmpeg",
-            "-hide_banner",
-            "-nostdin",
-            "-f",
-            "avfoundation",
-            "-i",
-            f":{blackhole_index}",
-            "-f",
-            "avfoundation",
-            "-i",
-            f":{mic_index}",
-            "-filter_complex",
-            "amix=inputs=2:duration=longest:normalize=0",
-            "-ar",
-            str(self.sample_rate),
-            "-c:a",
-            "pcm_s16le",
-            str(output_path),
-        ]
+        # build ffmpeg command using helper method
+        cmd = self._build_ffmpeg_command(
+            device_index=blackhole_index,
+            output_path=output_path,
+            audio_format=audio_format,
+            opus_bitrate=opus_bitrate,
+            flac_compression=flac_compression,
+            dual_input=True,
+            mic_index=mic_index,
+        )
 
         try:
             # start ffmpeg process
@@ -239,10 +413,24 @@ class AudioRecorder:
                 stderr = process.stderr.read().decode("utf-8", errors="replace")
                 raise RuntimeError(f"ffmpeg failed to start: {stderr[:500]}")
 
+            # Display format info
+            format_info = f"{audio_format.value.upper()}"
+            if audio_format == AudioFormat.OPUS:
+                format_info += f" @ {opus_bitrate} kbps"
+            elif audio_format == AudioFormat.FLAC:
+                format_info += f" (compression: {flac_compression})"
+            else:
+                format_info += f" @ {self.sample_rate} Hz, mixed to stereo"
+
             console.print(f"[green]✓[/green] dual recording started: {output_path.name}")
             console.print(f"  blackhole index: {blackhole_index}")
             console.print(f"  microphone index: {mic_index}")
-            console.print(f"  format: {self.sample_rate} hz, mixed to stereo")
+            console.print(f"  format: {format_info}")
+
+            if original_format != audio_format:
+                console.print(
+                    f"  [dim](fallback from {original_format.value} to {audio_format.value})[/dim]"
+                )
 
             # return the directory path, not the file path
             return output_path.parent

@@ -2,6 +2,7 @@
 
 import os
 import sys
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,14 @@ from rich.console import Console
 console = Console()
 
 
+class AudioFormat(str, Enum):
+    """Supported audio recording formats."""
+
+    WAV = "wav"
+    OPUS = "opus"
+    FLAC = "flac"
+
+
 class Config:
     """manages application configuration"""
 
@@ -23,6 +32,9 @@ class Config:
             "preferred_device": "Aggregate Device",
             "sample_rate": 48000,
             "channels": 2,
+            "format": "opus",  # recording format: wav, opus, or flac (default opus for space efficiency)
+            "opus_bitrate": 32,  # opus bitrate in kbps (6-510)
+            "flac_compression_level": 5,  # flac compression level (0-8)
         },
         "recording": {
             "default_auto_stop": 0,  # Default scheduled stop time in minutes (0 = no auto stop)
@@ -117,6 +129,9 @@ class Config:
             "MEETCAP_DEVICE": ("audio", "preferred_device"),
             "MEETCAP_SAMPLE_RATE": ("audio", "sample_rate", int),
             "MEETCAP_CHANNELS": ("audio", "channels", int),
+            "MEETCAP_AUDIO_FORMAT": ("audio", "format"),
+            "MEETCAP_OPUS_BITRATE": ("audio", "opus_bitrate", int),
+            "MEETCAP_FLAC_COMPRESSION": ("audio", "flac_compression_level", int),
             "MEETCAP_HOTKEY": ("hotkey", "stop"),
             "MEETCAP_HOTKEY_PREFIX": ("hotkey", "prefix"),
             "MEETCAP_STT_ENGINE": ("models", "stt_engine"),
@@ -190,6 +205,34 @@ class Config:
         if self.config.get("llm", {}).get("n_ctx") == 8192:
             console.print("[dim]migrating context size from 8k to 32k...[/dim]")
             self.config["llm"]["n_ctx"] = 32768
+            # save the migration immediately
+            self.save()
+
+        # migrate audio format to opus for existing configs without format key
+        # this includes both: missing format key AND format="wav"
+        current_format = self.config.get("audio", {}).get("format")
+        if current_format is None or current_format == "wav":
+            if current_format is None:
+                console.print(
+                    "[dim]setting audio format to opus (98% space savings vs previous default)...[/dim]"
+                )
+            else:
+                console.print(
+                    "[dim]migrating audio format from wav to opus (98% space savings)...[/dim]"
+                )
+
+            # Ensure audio section exists
+            if "audio" not in self.config:
+                self.config["audio"] = {}
+
+            self.config["audio"]["format"] = "opus"
+
+            # Also set the opus_bitrate and flac_compression_level defaults if not present
+            if "opus_bitrate" not in self.config["audio"]:
+                self.config["audio"]["opus_bitrate"] = 32
+            if "flac_compression_level" not in self.config["audio"]:
+                self.config["audio"]["flac_compression_level"] = 5
+
             # save the migration immediately
             self.save()
 
