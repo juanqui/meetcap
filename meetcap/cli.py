@@ -25,13 +25,13 @@ from meetcap.core.devices import (
 from meetcap.core.hotkeys import HotkeyManager, PermissionChecker
 from meetcap.core.recorder import AudioRecorder
 from meetcap.services.model_download import (
+    ensure_mlx_llm_model,
     ensure_mlx_whisper_model,
-    ensure_qwen_model,
     ensure_vosk_model,
     ensure_vosk_spk_model,
     ensure_whisper_model,
+    verify_mlx_llm_model,
     verify_mlx_whisper_model,
-    verify_qwen_model,
     verify_vosk_model,
     verify_whisper_model,
 )
@@ -211,7 +211,7 @@ class RecordingOrchestrator:
         sample_rate: int | None = None,
         channels: int | None = None,
         stt_engine: str | None = None,
-        llm_path: str | None = None,
+        llm_model: str | None = None,
         seed: int | None = None,
         auto_stop: int | None = None,
         audio_format: str | None = None,
@@ -227,7 +227,7 @@ class RecordingOrchestrator:
             sample_rate: audio sample rate
             channels: number of channels
             stt_engine: stt engine to use
-            llm_path: path to llm model
+            llm_model: huggingface repo id for llm model
             seed: random seed for llm
             auto_stop: minutes after which to automatically stop recording
             audio_format: recording format (wav/opus/flac)
@@ -359,7 +359,7 @@ class RecordingOrchestrator:
                 self._process_recording(
                     audio_path=final_path,
                     stt_engine=stt_engine,
-                    llm_path=llm_path,
+                    llm_model=llm_model,
                     seed=seed,
                 )
                 self.processing_complete = True
@@ -394,7 +394,7 @@ class RecordingOrchestrator:
                         self._process_recording(
                             audio_path=final_path,
                             stt_engine=stt_engine,
-                            llm_path=llm_path,
+                            llm_model=llm_model,
                             seed=seed,
                         )
                         self.processing_complete = True
@@ -774,7 +774,7 @@ class RecordingOrchestrator:
         self,
         transcript_path: Path,
         base_path: Path,
-        llm_path: str | None = None,
+        llm_model: str | None = None,
         seed: int | None = None,
     ) -> Path | None:
         """
@@ -783,7 +783,7 @@ class RecordingOrchestrator:
         args:
             transcript_path: path to transcript text file
             base_path: base path for output files
-            llm_path: optional llm model path
+            llm_model: optional llm model name override
             seed: optional random seed
 
         returns:
@@ -797,32 +797,20 @@ class RecordingOrchestrator:
             # ensure threshold is a float
             check_memory_pressure(float(threshold))
 
-        # use provided path or default from config
-        if llm_path:
-            llm_path = Path(llm_path)
-        else:
-            llm_path = self.config.expand_path(self.config.get("models", "llm_gguf_path"))
-
-        # ensure model exists (download if needed)
-        if not llm_path.exists():
-            console.print("[yellow]llm model not found, attempting download...[/yellow]")
-            models_dir = self.config.expand_path(self.config.get("paths", "models_dir"))
-            llm_path = ensure_qwen_model(models_dir)
-            if not llm_path:
-                console.print("[red]failed to download llm model[/red]")
-                return None
+        # use provided model name or default from config
+        if not llm_model:
+            llm_model = self.config.get(
+                "models", "llm_model_name", "mlx-community/Qwen3.5-4B-MLX-4bit"
+            )
 
         llm_config = self.config.get_section("llm")
 
         llm_service = SummarizationService(
-            model_path=llm_path,
-            n_ctx=llm_config.get("n_ctx", 32768),
-            n_threads=llm_config.get("n_threads", 6),
-            n_gpu_layers=llm_config.get("n_gpu_layers", 35),
-            n_batch=llm_config.get("n_batch", 1024),
+            model_name=llm_model,
             temperature=llm_config.get("temperature", 0.4),
             max_tokens=llm_config.get("max_tokens", 4096),
-            seed=seed,
+            enable_thinking=llm_config.get("enable_thinking", False),
+            thinking_budget=llm_config.get("thinking_budget", 512),
         )
 
         try:
@@ -855,7 +843,7 @@ class RecordingOrchestrator:
                 has_speaker_info=has_speaker_info,
                 manual_notes_path=manual_notes_path,
             )
-            summary_path = save_summary(summary, base_path)
+            summary_path = save_summary(summary, base_path, transcript_text=transcript_text)
 
             # explicitly unload model after summarization
             if hasattr(llm_service, "unload_model"):
@@ -899,7 +887,7 @@ class RecordingOrchestrator:
         self,
         audio_path: Path,
         stt_engine: str,
-        llm_path: str | None,
+        llm_model: str | None,
         seed: int | None,
     ) -> None:
         """
@@ -908,7 +896,7 @@ class RecordingOrchestrator:
         args:
             audio_path: path to recording directory or audio file
             stt_engine: stt engine to use
-            llm_path: optional llm model path
+            llm_model: optional llm model name
             seed: optional random seed
         """
         # initialize memory monitoring if enabled
@@ -959,7 +947,7 @@ class RecordingOrchestrator:
             self.memory_monitor.checkpoint("before_llm")
 
         # summarization
-        summary_path = self._process_transcript_to_summary(text_path, base_path, llm_path, seed)
+        summary_path = self._process_transcript_to_summary(text_path, base_path, llm_model, seed)
         if not summary_path:
             return
 
@@ -1166,14 +1154,16 @@ class RecordingOrchestrator:
                 stt_display += " (default)"
 
         # resolve actual LLM model being used
-        actual_llm_path = llm_model
-        if not actual_llm_path:
-            actual_llm_path = str(
-                self.config.expand_path(self.config.get("models", "llm_gguf_path"))
+        actual_llm_model = llm_model
+        if not actual_llm_model:
+            actual_llm_model = self.config.get(
+                "models", "llm_model_name", "mlx-community/Qwen3.5-4B-MLX-4bit"
             )
 
-        # extract model name from path for display
-        llm_display = Path(actual_llm_path).name if actual_llm_path else "Qwen3-4B-Thinking"
+        # extract model name for display
+        llm_display = (
+            actual_llm_model.split("/")[-1] if "/" in actual_llm_model else actual_llm_model
+        )
         if not llm_model:
             llm_display += " (default)"
 
@@ -1325,7 +1315,7 @@ def record(
     llm: str | None = typer.Option(
         None,
         "--llm",
-        help="path to llm gguf model",
+        help="huggingface repo id for llm model",
     ),
     seed: int | None = typer.Option(
         None,
@@ -1457,7 +1447,7 @@ def record(
             sample_rate=rate,
             channels=channels,
             stt_engine=stt,
-            llm_path=llm,
+            llm_model=llm,
             seed=seed,
             auto_stop=auto_stop,
             audio_format=audio_format_lower,
@@ -1484,7 +1474,7 @@ def summarize(
     llm: str | None = typer.Option(
         None,
         "--llm",
-        help="path to llm gguf model",
+        help="huggingface repo id for llm model",
     ),
     seed: int | None = typer.Option(
         None,
@@ -1552,7 +1542,7 @@ def summarize(
         orchestrator._process_recording(
             audio_path=audio_path,
             stt_engine=stt,
-            llm_path=llm,
+            llm_model=llm,
             seed=seed,
         )
         orchestrator.processing_complete = True
@@ -1585,7 +1575,7 @@ def reprocess(
     llm: str | None = typer.Option(
         None,
         "--llm",
-        help="path to llm model GGUF file",
+        help="huggingface repo id for llm model",
     ),
     yes: bool = typer.Option(
         False,
@@ -2003,55 +1993,8 @@ def setup() -> None:
         config.config["models"]["stt_model_path"] = f"~/.meetcap/models/whisper-{stt_model_name}"
         config.save()
 
-    # step 5: select context size for llm
-    console.print("\n[bold]step 5: select llm context size[/bold]")
-    console.print(
-        "[cyan]context size determines how much transcript can be processed at once[/cyan]"
-    )
-
-    # check current configuration
-    current_ctx = config.get("llm", "n_ctx", 32768)
-
-    context_sizes = [
-        {"size": 16384, "label": "16k", "desc": "~30 min meetings"},
-        {"size": 32768, "label": "32k", "desc": "~1 hour meetings (recommended)"},
-        {"size": 65536, "label": "64k", "desc": "~2 hour meetings"},
-        {"size": 131072, "label": "128k", "desc": "3+ hour meetings"},
-    ]
-
-    console.print("\n[cyan]available context sizes:[/cyan]")
-    for i, ctx in enumerate(context_sizes, 1):
-        is_current = ctx["size"] == current_ctx
-        current_marker = " [green](current)[/green]" if is_current else ""
-        console.print(f"  {i}. [bold]{ctx['label']}[/bold] - {ctx['desc']}{current_marker}")
-
-    # find default choice based on current config
-    default_idx = next(
-        (i for i, ctx in enumerate(context_sizes, 1) if ctx["size"] == current_ctx), 2
-    )
-
-    choice = typer.prompt("\nselect context size (1-4)", default=str(default_idx))
-    try:
-        ctx_idx = int(choice) - 1
-        if 0 <= ctx_idx < len(context_sizes):
-            selected_ctx = context_sizes[ctx_idx]
-        else:
-            selected_ctx = context_sizes[1]  # default to 32k
-    except ValueError:
-        selected_ctx = context_sizes[1]  # default to 32k
-
-    console.print(f"\n[cyan]selected: {selected_ctx['label']} ({selected_ctx['desc']})[/cyan]")
-
-    # update config if changed
-    if selected_ctx["size"] != current_ctx:
-        config.config["llm"]["n_ctx"] = selected_ctx["size"]
-        config.save()
-        console.print(f"[green]✓[/green] context size updated to {selected_ctx['label']}")
-    else:
-        console.print(f"[green]✓[/green] keeping current context size of {selected_ctx['label']}")
-
-    # step 6: configure output directory
-    console.print("\n[bold]step 6: configure output directory[/bold]")
+    # step 5: configure output directory
+    console.print("\n[bold]step 5: configure output directory[/bold]")
     console.print("[cyan]where should recordings be saved?[/cyan]")
 
     current_out_dir = config.get("paths", "out_dir", "~/Recordings/meetcap")
@@ -2072,27 +2015,21 @@ def setup() -> None:
         console.print(f"[yellow]⚠[/yellow] could not create directory: {e}")
         console.print(f"[yellow]keeping current directory: {current_out_dir}[/yellow]")
 
-    # step 7: select and download llm model
-    console.print("\n[bold]step 7: select llm (summarization) model[/bold]")
+    # step 6: select and download llm model
+    console.print("\n[bold]step 6: select llm (summarization) model[/bold]")
 
     llm_models = [
         {
-            "key": "thinking",
-            "name": "Qwen3-4B-Thinking",
+            "repo": "mlx-community/Qwen3.5-4B-MLX-4bit",
+            "name": "Qwen3.5-4B",
             "desc": "Best for meeting summaries (default)",
-            "size": "~4-5GB",
+            "size": "~2.9GB",
         },
         {
-            "key": "instruct",
-            "name": "Qwen3-4B-Instruct",
-            "desc": "General purpose, follows instructions",
-            "size": "~4-5GB",
-        },
-        {
-            "key": "gpt-oss",
-            "name": "GPT-OSS-20B",
+            "repo": "mlx-community/Qwen3.5-9B-MLX-4bit",
+            "name": "Qwen3.5-9B",
             "desc": "Larger model, more capable",
-            "size": "~11GB",
+            "size": "~5.6GB",
         },
     ]
 
@@ -2100,7 +2037,7 @@ def setup() -> None:
     for i, model in enumerate(llm_models, 1):
         console.print(f"  {i}. [bold]{model['name']}[/bold] - {model['desc']} ({model['size']})")
 
-    choice = typer.prompt("\nselect model (1-3)", default="1")
+    choice = typer.prompt("\nselect model (1-2)", default="1")
     try:
         model_idx = int(choice) - 1
         if 0 <= model_idx < len(llm_models):
@@ -2112,41 +2049,21 @@ def setup() -> None:
 
     console.print(f"\n[cyan]selected: {llm_choice['name']}[/cyan]")
 
-    # map choice to filename
-    model_filenames = {
-        "thinking": "Qwen3-4B-Thinking-2507-Q8_K_XL.gguf",
-        "instruct": "Qwen3-4B-Instruct-2507-Q8_K_XL.gguf",
-        "gpt-oss": "gpt-oss-20b-Q4_K_M.gguf",
-    }
+    repo = llm_choice["repo"]
 
-    model_filename = model_filenames[llm_choice["key"]]
-    model_path = models_dir / model_filename
-
-    # check if already exists
-    if model_path.exists():
-        file_size_mb = model_path.stat().st_size / (1024 * 1024)
-        if file_size_mb > 100:
-            console.print(f"[green]✓[/green] {llm_choice['name']} already installed")
-        else:
-            console.print("[yellow]⚠[/yellow] model file seems incomplete, re-downloading")
-            model_path = None
+    # check if already available
+    if verify_mlx_llm_model(repo):
+        console.print(f"[green]✓[/green] {llm_choice['name']} already installed")
     else:
-        model_path = None
-
-    if not model_path:
         console.print(f"[cyan]downloading {llm_choice['name']} ({llm_choice['size']})...[/cyan]")
-        console.print("[yellow]⚠ this is a large download and may take 10-30 minutes[/yellow]")
+        console.print("[yellow]⚠ this may take several minutes[/yellow]")
 
         # ask for confirmation
         if typer.confirm("proceed with download?"):
-            model_path = ensure_qwen_model(models_dir, model_choice=llm_choice["key"])
+            success = ensure_mlx_llm_model(repo)
 
-            if model_path:
+            if success:
                 console.print(f"[green]✓[/green] {llm_choice['name']} downloaded")
-                # update config with selected model
-                config.config["models"]["llm_model_name"] = model_filename
-                config.config["models"]["llm_gguf_path"] = f"~/.meetcap/models/{model_filename}"
-                config.save()
             else:
                 console.print(f"[red]✗[/red] {llm_choice['name']} download failed")
                 console.print("[yellow]check your internet connection and try again[/yellow]")
@@ -2154,12 +2071,15 @@ def setup() -> None:
         else:
             console.print("[yellow]skipped llm download (summarization will not work)[/yellow]")
 
+    # update config with selected model
+    config.config["models"]["llm_model_name"] = repo
+    config.save()
+
     # final summary
     console.print(
         Panel(
             "[green]✅ setup complete![/green]\n\n"
             f"output directory: {new_out_dir}\n"
-            f"context size: {selected_ctx['label']} ({selected_ctx['desc']})\n"
             "you're ready to start recording meetings:\n"
             "[cyan]meetcap record[/cyan]",
             title="🎉 success",
@@ -2237,11 +2157,13 @@ def verify() -> None:
     else:
         checks.append(("mlx-whisper", "⚠️ requires Apple Silicon", "yellow"))
 
-    # check qwen llm model (no download)
-    if verify_qwen_model(models_dir):
-        checks.append(("llm model", "✅ Qwen3-4B ready", "green"))
+    # check mlx llm model (no download)
+    llm_model_name = config.get("models", "llm_model_name", "mlx-community/Qwen3.5-4B-MLX-4bit")
+    if verify_mlx_llm_model(llm_model_name):
+        short_name = llm_model_name.split("/")[-1] if "/" in llm_model_name else llm_model_name
+        checks.append(("llm model", f"✅ {short_name} ready", "green"))
     else:
-        checks.append(("llm model", "❌ Qwen3-4B not found", "red"))
+        checks.append(("llm model", "❌ mlx llm model not found", "red"))
 
     # check output directory
     out_dir = config.expand_path(config.get("paths", "out_dir"))

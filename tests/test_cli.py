@@ -200,7 +200,7 @@ class TestRecordingOrchestrator:
                 )
 
                 orchestrator._process_recording(
-                    recording_dir, stt_engine="fwhisper", llm_path=None, seed=None
+                    recording_dir, stt_engine="fwhisper", llm_model=None, seed=None
                 )
 
                 mock_service.transcribe.assert_called_once_with(audio_file)
@@ -239,7 +239,7 @@ class TestRecordingOrchestrator:
                             orchestrator._process_recording(
                                 recording_dir,
                                 stt_engine="fwhisper",
-                                llm_path="/path/to/model.gguf",
+                                llm_model="mlx-community/Qwen3.5-4B-MLX-4bit",
                                 seed=None,
                             )
 
@@ -288,7 +288,7 @@ class TestCLICommands:
             mock_config.expand_path.return_value = temp_dir
             mock_config.get.side_effect = lambda s, k, d=None: {
                 ("models", "stt_model_path"): str(temp_dir / "whisper"),
-                ("models", "llm_gguf_path"): str(temp_dir / "llm.gguf"),
+                ("models", "llm_model_name"): "mlx-community/Qwen3.5-4B-MLX-4bit",
             }.get((s, k), d)
             mock_config_class.return_value = mock_config
 
@@ -449,7 +449,7 @@ class TestCLICommands:
                         assert call_kwargs["sample_rate"] == 44100
                         assert call_kwargs["channels"] == 1
                         assert call_kwargs["stt_engine"] == "fwhisper"
-                        assert call_kwargs["llm_path"] == "/models/llm.gguf"
+                        assert call_kwargs["llm_model"] == "/models/llm.gguf"
                         assert call_kwargs["seed"] == 42
                         # auto_stop should default to 0 when not specified
                         assert call_kwargs["auto_stop"] == 0
@@ -464,8 +464,8 @@ class TestCLICommands:
 
             # Mock to return different values for different calls
             def mock_get_side_effect(section, key, default=None):
-                if section == "models" and key == "llm_gguf_path":
-                    return str(temp_dir / "model.gguf")
+                if section == "models" and key == "llm_model_name":
+                    return "mlx-community/Qwen3.5-4B-MLX-4bit"
                 elif section == "memory":
                     # Return proper memory config defaults
                     memory_config = {
@@ -478,7 +478,7 @@ class TestCLICommands:
                 return default
 
             mock_config.get.side_effect = mock_get_side_effect
-            mock_config.expand_path.return_value = temp_dir / "model.gguf"
+            mock_config.expand_path.return_value = temp_dir
             mock_config_class.return_value = mock_config
 
             # create mock model file
@@ -537,17 +537,14 @@ class TestCLICommands:
                         "enable_monitoring": False,
                     }
                     return memory_config.get(key, default)
-                elif section == "models" and key == "llm_gguf_path":
-                    return str(temp_dir / "model.gguf")
+                elif section == "models" and key == "llm_model_name":
+                    return "mlx-community/Qwen3.5-4B-MLX-4bit"
                 else:
                     return default
 
             mock_config.get.side_effect = mock_get
-            mock_config.expand_path.return_value = temp_dir / "model.gguf"
+            mock_config.expand_path.return_value = temp_dir
             mock_config_class.return_value = mock_config
-
-            # create mock model file
-            (temp_dir / "model.gguf").touch()
 
             with patch("meetcap.cli.FasterWhisperService") as mock_stt:
                 mock_service = Mock()
@@ -582,14 +579,13 @@ class TestCLICommands:
         with patch("meetcap.cli.Config") as mock_config_class:
             mock_config = Mock()
             mock_config.get.side_effect = lambda section, key, default=None: {
-                ("llm", "n_ctx"): 32768,
                 ("paths", "models_dir"): "~/.meetcap/models",
             }.get((section, key), default)
             mock_config.expand_path.return_value = Path("/mock/models")
             mock_config.config = {
                 "models": {},
                 "paths": {"models_dir": "~/.meetcap/models"},
-                "llm": {"n_ctx": 32768},
+                "llm": {},
             }
             mock_config_class.return_value = mock_config
 
@@ -598,8 +594,8 @@ class TestCLICommands:
                 patch("subprocess.run", return_value=Mock(returncode=0)),
                 patch("platform.processor", return_value="arm"),
                 patch(
-                    "typer.prompt", side_effect=["1", "1", "2", "~/Recordings/meetcap", "1"]
-                ),  # User choices: engine, whisper model, context size, output dir, llm model
+                    "typer.prompt", side_effect=["1", "1", "~/Recordings/meetcap", "1"]
+                ),  # User choices: engine, whisper model, output dir, llm model
                 patch("typer.confirm", return_value=True),
                 patch("time.sleep"),  # Mock time.sleep
                 patch("threading.Event.wait", return_value=False),  # Mock hotkey timeout
@@ -612,10 +608,10 @@ class TestCLICommands:
                 patch("importlib.util.find_spec", return_value=Mock()),
                 # Mock all model verification/download functions
                 patch("meetcap.cli.verify_whisper_model", return_value=False),
-                patch("meetcap.cli.verify_qwen_model", return_value=False),
+                patch("meetcap.cli.verify_mlx_llm_model", return_value=False),
                 patch("meetcap.cli.verify_mlx_whisper_model", return_value=False),
                 patch("meetcap.cli.ensure_whisper_model", return_value="/models/whisper"),
-                patch("meetcap.cli.ensure_qwen_model", return_value="/models/qwen.gguf"),
+                patch("meetcap.cli.ensure_mlx_llm_model", return_value=True),
                 patch("meetcap.cli.ensure_mlx_whisper_model", return_value="/models/mlx-whisper"),
                 # Mock hardware interactions
                 patch("meetcap.cli.list_audio_devices", return_value=[AudioDevice(0, "Mic")]),

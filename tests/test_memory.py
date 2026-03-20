@@ -206,33 +206,26 @@ class TestLLMMemoryManagement:
     @patch("meetcap.services.summarization.SummarizationService._load_model")
     def test_llm_unload(self, mock_load, temp_dir):
         """test SummarizationService model unloading."""
-        # create dummy model file
-        model_path = temp_dir / "test_model.gguf"
-        model_path.write_text("dummy")
-
-        service = SummarizationService(model_path=str(model_path))
+        service = SummarizationService(model_name="test-model")
 
         # simulate loaded model
-        service.llm = Mock()
+        service.model = Mock()
+        service.processor = Mock()
 
         # test unloading
         service.unload_model()
 
-        assert service.llm is None
+        assert service.model is None
 
     def test_llm_is_loaded(self, temp_dir):
         """test LLM loaded status checking."""
-        # create dummy model file
-        model_path = temp_dir / "test_model.gguf"
-        model_path.write_text("dummy")
-
-        service = SummarizationService(model_path=str(model_path))
+        service = SummarizationService(model_name="test-model")
 
         # initially not loaded
         assert service.is_loaded() is False
 
         # simulate loaded model
-        service.llm = Mock()
+        service.model = Mock()
         assert service.is_loaded() is True
 
         # after unloading
@@ -272,7 +265,7 @@ class TestMemoryLifecycle:
 
             # run processing
             orchestrator._process_recording(
-                audio_path=audio_file, stt_engine="fwhisper", llm_path=None, seed=None
+                audio_path=audio_file, stt_engine="fwhisper", llm_model=None, seed=None
             )
 
             # verify memory monitoring was enabled

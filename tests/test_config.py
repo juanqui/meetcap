@@ -94,11 +94,8 @@ class TestConfig:
             "MEETCAP_CHANNELS": "1",
             "MEETCAP_HOTKEY": "<env>+<key>",
             "MEETCAP_STT_MODEL": "/env/stt/model",
-            "MEETCAP_LLM_MODEL": "/env/llm/model",
+            "MEETCAP_LLM_MODEL": "mlx-community/custom-model",
             "MEETCAP_OUT_DIR": "/env/output",
-            "MEETCAP_N_CTX": "4096",
-            "MEETCAP_N_THREADS": "8",
-            "MEETCAP_N_GPU_LAYERS": "20",
         }
 
         with patch.dict(os.environ, env_vars):
@@ -109,15 +106,12 @@ class TestConfig:
         assert config.get("audio", "preferred_device") == "Env Device"
         assert config.get("hotkey", "stop") == "<env>+<key>"
         assert config.get("models", "stt_model_path") == "/env/stt/model"
-        assert config.get("models", "llm_gguf_path") == "/env/llm/model"
+        assert config.get("models", "llm_model_name") == "mlx-community/custom-model"
         assert config.get("paths", "out_dir") == "/env/output"
 
         # verify integer overrides
         assert config.get("audio", "sample_rate") == 96000
         assert config.get("audio", "channels") == 1
-        assert config.get("llm", "n_ctx") == 4096
-        assert config.get("llm", "n_threads") == 8
-        assert config.get("llm", "n_gpu_layers") == 20
 
     def test_env_override_invalid_int(self):
         """test handling of invalid integer env values"""
@@ -307,14 +301,13 @@ class TestConfig:
 
         # model defaults
         assert "large-v3" in config.get("models", "stt_model_name")
-        assert "Qwen3-4B" in config.get("models", "llm_model_name")
+        assert "Qwen3.5" in config.get("models", "llm_model_name")
 
         # paths defaults
         assert "Recordings/meetcap" in config.get("paths", "out_dir")
         assert ".meetcap/models" in config.get("paths", "models_dir")
 
         # llm defaults
-        assert config.get("llm", "n_ctx") == 32768
         assert config.get("llm", "temperature") == 0.4
         assert config.get("llm", "max_tokens") == 4096
 

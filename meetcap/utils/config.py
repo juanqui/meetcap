@@ -53,20 +53,17 @@ class Config:
             "vosk_model_path": "~/.meetcap/models/vosk/vosk-model-en-us-0.22",  # vosk model directory
             "vosk_spk_model_path": "~/.meetcap/models/vosk/vosk-model-spk-0.4",  # speaker model directory
             "enable_speaker_diarization": False,  # enable speaker identification with vosk
-            "llm_model_name": "Qwen3-4B-Thinking-2507-Q8_K_XL.gguf",  # qwen model name
-            "llm_gguf_path": "~/.meetcap/models/Qwen3-4B-Thinking-2507-Q8_K_XL.gguf",  # auto-download path
+            "llm_model_name": "mlx-community/Qwen3.5-4B-MLX-4bit",  # mlx llm model repo id
         },
         "paths": {
             "out_dir": "~/Recordings/meetcap",
             "models_dir": "~/.meetcap/models",  # directory for auto-downloaded models
         },
         "llm": {
-            "n_ctx": 32768,  # default context size (32k tokens)
-            "n_threads": 6,
-            "n_gpu_layers": 35,
-            "n_batch": 1024,
             "temperature": 0.4,
-            "max_tokens": 4096,  # increased for detailed summaries
+            "max_tokens": 4096,
+            "enable_thinking": False,  # disable thinking by default for faster output
+            "thinking_budget": 512,  # max thinking tokens when thinking is enabled
         },
         "telemetry": {
             "disable": True,
@@ -141,11 +138,8 @@ class Config:
             "MEETCAP_VOSK_SPK_MODEL": ("models", "vosk_spk_model_path"),
             "MEETCAP_ENABLE_DIARIZATION": ("models", "enable_speaker_diarization", bool),
             "MEETCAP_MLX_STT_MODEL": ("models", "mlx_stt_model_name"),
-            "MEETCAP_LLM_MODEL": ("models", "llm_gguf_path"),
+            "MEETCAP_LLM_MODEL": ("models", "llm_model_name"),
             "MEETCAP_OUT_DIR": ("paths", "out_dir"),
-            "MEETCAP_N_CTX": ("llm", "n_ctx", int),
-            "MEETCAP_N_THREADS": ("llm", "n_threads", int),
-            "MEETCAP_N_GPU_LAYERS": ("llm", "n_gpu_layers", int),
             # memory management settings
             "MEETCAP_MEMORY_AGGRESSIVE_GC": (
                 "memory",
@@ -201,11 +195,24 @@ class Config:
 
     def _migrate_config(self) -> None:
         """apply config migrations for backward compatibility."""
-        # migrate n_ctx from 8192 to 32768 if it's still at the old default
-        if self.config.get("llm", {}).get("n_ctx") == 8192:
-            console.print("[dim]migrating context size from 8k to 32k...[/dim]")
-            self.config["llm"]["n_ctx"] = 32768
-            # save the migration immediately
+        # migrate GGUF-based config to MLX-based config
+        models = self.config.get("models", {})
+        needs_migration = False
+
+        # check for old llm_gguf_path key
+        if "llm_gguf_path" in models:
+            console.print("[dim]migrating from GGUF to MLX llm model...[/dim]")
+            del self.config["models"]["llm_gguf_path"]
+            self.config["models"]["llm_model_name"] = "mlx-community/Qwen3.5-4B-MLX-4bit"
+            needs_migration = True
+
+        # check for llm_model_name ending in .gguf
+        if models.get("llm_model_name", "").endswith(".gguf"):
+            console.print("[dim]migrating .gguf model name to MLX model...[/dim]")
+            self.config["models"]["llm_model_name"] = "mlx-community/Qwen3.5-4B-MLX-4bit"
+            needs_migration = True
+
+        if needs_migration:
             self.save()
 
         # migrate audio format to opus for existing configs without format key

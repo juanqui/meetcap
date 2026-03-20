@@ -1,0 +1,514 @@
+"""tests for speaker diarization services"""
+
+from pathlib import Path
+from unittest.mock import Mock, patch
+
+import pytest
+
+from meetcap.services.diarization import (
+    DiarizationSegment,
+    DiarizationService,
+    SherpaOnnxDiarizationService,
+    assign_speakers,
+)
+from meetcap.services.transcription import TranscriptSegment
+
+
+class TestDiarizationSegment:
+    """test diarization segment dataclass"""
+
+    def test_create_segment(self):
+        """test creating a diarization segment"""
+        seg = DiarizationSegment(start=1.0, end=5.0, speaker=0)
+
+        assert seg.start == 1.0
+        assert seg.end == 5.0
+        assert seg.speaker == 0
+
+
+class TestDiarizationService:
+    """test base diarization service"""
+
+    def test_diarize_not_implemented(self):
+        """test that base class raises NotImplementedError"""
+        service = DiarizationService()
+        with pytest.raises(NotImplementedError):
+            service.diarize(Path("test.wav"))
+
+    def test_load_model_not_implemented(self):
+        """test that base class raises NotImplementedError"""
+        service = DiarizationService()
+        with pytest.raises(NotImplementedError):
+            service.load_model()
+
+    def test_unload_model_not_implemented(self):
+        """test that base class raises NotImplementedError"""
+        service = DiarizationService()
+        with pytest.raises(NotImplementedError):
+            service.unload_model()
+
+
+class TestSherpaOnnxDiarizationService:
+    """test sherpa-onnx diarization service"""
+
+    def test_init(self):
+        """test initialization"""
+        service = SherpaOnnxDiarizationService(
+            segmentation_model="/path/to/seg.onnx",
+            embedding_model="/path/to/emb.onnx",
+            num_speakers=3,
+            threshold=0.9,
+        )
+
+        assert service.segmentation_model == "/path/to/seg.onnx"
+        assert service.embedding_model == "/path/to/emb.onnx"
+        assert service.num_speakers == 3
+        assert service.threshold == 0.9
+        assert service.sd is None
+
+    def test_init_defaults(self):
+        """test default parameters"""
+        service = SherpaOnnxDiarizationService(
+            segmentation_model="/seg.onnx",
+            embedding_model="/emb.onnx",
+        )
+
+        assert service.num_speakers == -1
+        assert service.threshold == 0.85
+        assert service.min_duration_on == 0.3
+        assert service.min_duration_off == 0.5
+
+    def test_load_model_import_error(self):
+        """test handling import error when sherpa-onnx not installed"""
+        service = SherpaOnnxDiarizationService(
+            segmentation_model="/seg.onnx",
+            embedding_model="/emb.onnx",
+        )
+
+        original_import = __builtins__["__import__"]
+
+        def mock_import(name, *args, **kwargs):
+            if name == "sherpa_onnx":
+                raise ImportError("No module named 'sherpa_onnx'")
+            return original_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=mock_import):
+            with pytest.raises(ImportError) as exc:
+                service.load_model()
+
+            assert "sherpa-onnx not installed" in str(exc.value)
+
+    def test_load_model_missing_segmentation(self, tmp_path):
+        """test error when segmentation model file missing"""
+        emb_path = tmp_path / "emb.onnx"
+        emb_path.write_bytes(b"fake")
+
+        service = SherpaOnnxDiarizationService(
+            segmentation_model=str(tmp_path / "missing_seg.onnx"),
+            embedding_model=str(emb_path),
+        )
+
+        mock_sherpa = Mock()
+        with patch.dict("sys.modules", {"sherpa_onnx": mock_sherpa}):
+            with pytest.raises(FileNotFoundError) as exc:
+                service.load_model()
+            assert "segmentation model not found" in str(exc.value)
+
+    def test_load_model_missing_embedding(self, tmp_path):
+        """test error when embedding model file missing"""
+        seg_path = tmp_path / "seg.onnx"
+        seg_path.write_bytes(b"fake")
+
+        service = SherpaOnnxDiarizationService(
+            segmentation_model=str(seg_path),
+            embedding_model=str(tmp_path / "missing_emb.onnx"),
+        )
+
+        mock_sherpa = Mock()
+        with patch.dict("sys.modules", {"sherpa_onnx": mock_sherpa}):
+            with pytest.raises(FileNotFoundError) as exc:
+                service.load_model()
+            assert "embedding model not found" in str(exc.value)
+
+    def test_load_model_success(self, tmp_path):
+        """test successful model loading"""
+        seg_path = tmp_path / "seg.onnx"
+        seg_path.write_bytes(b"fake")
+        emb_path = tmp_path / "emb.onnx"
+        emb_path.write_bytes(b"fake")
+
+        service = SherpaOnnxDiarizationService(
+            segmentation_model=str(seg_path),
+            embedding_model=str(emb_path),
+        )
+
+        mock_sherpa = Mock()
+        mock_config = Mock()
+        mock_config.validate.return_value = True
+        mock_sherpa.OfflineSpeakerDiarizationConfig.return_value = mock_config
+        mock_sd = Mock()
+        mock_sherpa.OfflineSpeakerDiarization.return_value = mock_sd
+
+        with patch.dict("sys.modules", {"sherpa_onnx": mock_sherpa}):
+            service.load_model()
+
+        assert service.sd is mock_sd
+
+    def test_load_model_idempotent(self, tmp_path):
+        """test that loading twice doesn't reload"""
+        service = SherpaOnnxDiarizationService(
+            segmentation_model="/seg.onnx",
+            embedding_model="/emb.onnx",
+        )
+        service.sd = Mock()
+        service.load_model()  # should not attempt to reload
+
+    def test_load_model_config_validation_failure(self, tmp_path):
+        """test error when sherpa-onnx config validation fails"""
+        seg_path = tmp_path / "seg.onnx"
+        seg_path.write_bytes(b"fake")
+        emb_path = tmp_path / "emb.onnx"
+        emb_path.write_bytes(b"fake")
+
+        service = SherpaOnnxDiarizationService(
+            segmentation_model=str(seg_path),
+            embedding_model=str(emb_path),
+        )
+
+        mock_sherpa = Mock()
+        mock_config = Mock()
+        mock_config.validate.return_value = False
+        mock_sherpa.OfflineSpeakerDiarizationConfig.return_value = mock_config
+
+        with patch.dict("sys.modules", {"sherpa_onnx": mock_sherpa}):
+            with pytest.raises(RuntimeError) as exc:
+                service.load_model()
+            assert "config validation failed" in str(exc.value)
+
+    def test_diarize_file_not_found(self, tmp_path):
+        """test diarization with missing file"""
+        service = SherpaOnnxDiarizationService(
+            segmentation_model="/seg.onnx",
+            embedding_model="/emb.onnx",
+        )
+        with pytest.raises(FileNotFoundError):
+            service.diarize(tmp_path / "nonexistent.wav")
+
+    def test_diarize_success_no_resample(self, tmp_path):
+        """test successful diarization without resampling"""
+        import numpy as np
+
+        audio_path = tmp_path / "test.wav"
+        audio_path.write_bytes(b"fake audio")
+
+        service = SherpaOnnxDiarizationService(
+            segmentation_model="/seg.onnx",
+            embedding_model="/emb.onnx",
+        )
+
+        # set up mock sd engine
+        mock_sd = Mock()
+        mock_sd.sample_rate = 16000
+
+        # mock result segments
+        mock_segment_0 = Mock()
+        mock_segment_0.start = 0.0
+        mock_segment_0.end = 3.0
+        mock_segment_0.speaker = 0
+
+        mock_segment_1 = Mock()
+        mock_segment_1.start = 3.0
+        mock_segment_1.end = 6.0
+        mock_segment_1.speaker = 1
+
+        mock_result = Mock()
+        mock_result.sort_by_start_time.return_value = [mock_segment_0, mock_segment_1]
+        mock_sd.process.return_value = mock_result
+
+        service.sd = mock_sd
+
+        # mock soundfile to return audio at the same sample rate as sd
+        audio_data = np.zeros((16000 * 6, 1), dtype=np.float32)
+        mock_sf = Mock()
+        mock_sf.read.return_value = (audio_data, 16000)
+
+        with patch.dict("sys.modules", {"soundfile": mock_sf}):
+            segments = service.diarize(audio_path)
+
+        assert len(segments) == 2
+        assert segments[0].start == 0.0
+        assert segments[0].end == 3.0
+        assert segments[0].speaker == 0
+        assert segments[1].speaker == 1
+
+        # verify soundfile was called correctly
+        mock_sf.read.assert_called_once_with(str(audio_path), dtype="float32", always_2d=True)
+
+    def test_diarize_with_resampling(self, tmp_path):
+        """test diarization when audio needs resampling"""
+        import numpy as np
+
+        audio_path = tmp_path / "test.wav"
+        audio_path.write_bytes(b"fake audio")
+
+        service = SherpaOnnxDiarizationService(
+            segmentation_model="/seg.onnx",
+            embedding_model="/emb.onnx",
+        )
+
+        mock_sd = Mock()
+        mock_sd.sample_rate = 16000
+
+        mock_segment = Mock()
+        mock_segment.start = 0.0
+        mock_segment.end = 2.0
+        mock_segment.speaker = 0
+
+        mock_result = Mock()
+        mock_result.sort_by_start_time.return_value = [mock_segment]
+        mock_sd.process.return_value = mock_result
+
+        service.sd = mock_sd
+
+        # audio at 48kHz (different from sd.sample_rate=16kHz), so resampling is needed
+        audio_data = np.zeros((48000 * 2, 1), dtype=np.float32)
+        mock_sf = Mock()
+        mock_sf.read.return_value = (audio_data, 48000)
+
+        resampled_audio = np.zeros(16000 * 2, dtype=np.float32)
+        mock_librosa = Mock()
+        mock_librosa.resample.return_value = resampled_audio
+
+        with patch.dict("sys.modules", {"soundfile": mock_sf, "librosa": mock_librosa}):
+            segments = service.diarize(audio_path)
+
+        assert len(segments) == 1
+        assert segments[0].start == 0.0
+        assert segments[0].end == 2.0
+        assert segments[0].speaker == 0
+
+        # verify librosa was called for resampling
+        mock_librosa.resample.assert_called_once()
+        call_kwargs = mock_librosa.resample.call_args
+        assert call_kwargs[1]["orig_sr"] == 48000
+        assert call_kwargs[1]["target_sr"] == 16000
+
+    def test_diarize_console_output(self, tmp_path):
+        """test that diarize prints correct console messages"""
+        import numpy as np
+
+        audio_path = tmp_path / "test.wav"
+        audio_path.write_bytes(b"fake audio")
+
+        service = SherpaOnnxDiarizationService(
+            segmentation_model="/seg.onnx",
+            embedding_model="/emb.onnx",
+        )
+
+        mock_sd = Mock()
+        mock_sd.sample_rate = 16000
+
+        mock_segment = Mock()
+        mock_segment.start = 0.0
+        mock_segment.end = 5.0
+        mock_segment.speaker = 0
+
+        mock_result = Mock()
+        mock_result.sort_by_start_time.return_value = [mock_segment]
+        mock_sd.process.return_value = mock_result
+
+        service.sd = mock_sd
+
+        audio_data = np.zeros((16000 * 5, 1), dtype=np.float32)
+        mock_sf = Mock()
+        mock_sf.read.return_value = (audio_data, 16000)
+
+        with patch.dict("sys.modules", {"soundfile": mock_sf}):
+            with patch("meetcap.services.diarization.console") as mock_console:
+                service.diarize(audio_path)
+
+        # verify console output includes the filename
+        console_calls = [str(c) for c in mock_console.print.call_args_list]
+        assert any("test.wav" in call for call in console_calls)
+        # verify completion message
+        assert any("diarization complete" in call for call in console_calls)
+
+    def test_diarize_calls_load_model(self, tmp_path):
+        """test that diarize calls load_model if not already loaded"""
+        import numpy as np
+
+        audio_path = tmp_path / "test.wav"
+        audio_path.write_bytes(b"fake audio")
+
+        service = SherpaOnnxDiarizationService(
+            segmentation_model="/seg.onnx",
+            embedding_model="/emb.onnx",
+        )
+
+        # sd is None initially, so diarize should call load_model
+        mock_sd = Mock()
+        mock_sd.sample_rate = 16000
+        mock_segment = Mock()
+        mock_segment.start = 0.0
+        mock_segment.end = 1.0
+        mock_segment.speaker = 0
+        mock_result = Mock()
+        mock_result.sort_by_start_time.return_value = [mock_segment]
+        mock_sd.process.return_value = mock_result
+
+        audio_data = np.zeros((16000, 1), dtype=np.float32)
+        mock_sf = Mock()
+        mock_sf.read.return_value = (audio_data, 16000)
+
+        with patch.dict("sys.modules", {"soundfile": mock_sf}):
+            with patch.object(service, "load_model") as mock_load:
+                # after load_model is called, sd should be set
+                def set_sd():
+                    service.sd = mock_sd
+
+                mock_load.side_effect = set_sd
+                segments = service.diarize(audio_path)
+
+        mock_load.assert_called_once()
+        assert len(segments) == 1
+
+    def test_unload_model(self):
+        """test model unloading"""
+        service = SherpaOnnxDiarizationService(
+            segmentation_model="/seg.onnx",
+            embedding_model="/emb.onnx",
+        )
+        service.sd = Mock()
+        service.unload_model()
+        assert service.sd is None
+
+    def test_unload_model_when_not_loaded(self):
+        """test unloading when model not loaded"""
+        service = SherpaOnnxDiarizationService(
+            segmentation_model="/seg.onnx",
+            embedding_model="/emb.onnx",
+        )
+        service.unload_model()  # should not raise
+        assert service.sd is None
+
+
+class TestAssignSpeakers:
+    """test speaker assignment algorithm"""
+
+    def test_single_speaker(self):
+        """test with single speaker covering all segments"""
+        segments = [
+            TranscriptSegment(id=0, start=0.0, end=2.0, text="Hello"),
+            TranscriptSegment(id=1, start=2.0, end=4.0, text="World"),
+        ]
+        diar = [DiarizationSegment(start=0.0, end=5.0, speaker=0)]
+
+        result_segments, speakers = assign_speakers(segments, diar)
+
+        assert result_segments[0].speaker_id == 0
+        assert result_segments[1].speaker_id == 0
+        assert len(speakers) == 1
+        assert speakers[0]["label"] == "Speaker 1"
+
+    def test_multiple_speakers(self):
+        """test with clear speaker boundaries"""
+        segments = [
+            TranscriptSegment(id=0, start=0.0, end=3.0, text="Hello from A"),
+            TranscriptSegment(id=1, start=5.0, end=8.0, text="Hello from B"),
+            TranscriptSegment(id=2, start=10.0, end=13.0, text="Back to A"),
+        ]
+        diar = [
+            DiarizationSegment(start=0.0, end=4.0, speaker=0),
+            DiarizationSegment(start=4.5, end=9.0, speaker=1),
+            DiarizationSegment(start=9.5, end=14.0, speaker=0),
+        ]
+
+        result_segments, speakers = assign_speakers(segments, diar)
+
+        assert result_segments[0].speaker_id == 0
+        assert result_segments[1].speaker_id == 1
+        assert result_segments[2].speaker_id == 0
+        assert len(speakers) == 2
+
+    def test_non_sequential_speaker_ids(self):
+        """test remapping of non-sequential speaker IDs from sherpa-onnx"""
+        segments = [
+            TranscriptSegment(id=0, start=0.0, end=3.0, text="First"),
+            TranscriptSegment(id=1, start=5.0, end=8.0, text="Second"),
+            TranscriptSegment(id=2, start=10.0, end=13.0, text="Third"),
+        ]
+        diar = [
+            DiarizationSegment(start=0.0, end=4.0, speaker=0),
+            DiarizationSegment(start=4.5, end=9.0, speaker=5),  # non-sequential
+            DiarizationSegment(start=9.5, end=14.0, speaker=12),  # non-sequential
+        ]
+
+        result_segments, speakers = assign_speakers(segments, diar)
+
+        # should be remapped to 0, 1, 2
+        assert result_segments[0].speaker_id == 0
+        assert result_segments[1].speaker_id == 1
+        assert result_segments[2].speaker_id == 2
+        assert len(speakers) == 3
+        assert speakers[0]["id"] == 0
+        assert speakers[1]["id"] == 1
+        assert speakers[2]["id"] == 2
+
+    def test_empty_diarization(self):
+        """test with no diarization segments"""
+        segments = [
+            TranscriptSegment(id=0, start=0.0, end=2.0, text="Hello"),
+        ]
+        diar = []
+
+        result_segments, speakers = assign_speakers(segments, diar)
+
+        assert result_segments[0].speaker_id is None
+        assert speakers == []
+
+    def test_overlapping_diarization(self):
+        """test with overlapping diarization segments"""
+        segments = [
+            TranscriptSegment(id=0, start=1.0, end=3.0, text="Overlap test"),
+        ]
+        # two speakers overlap, but speaker 1 has more overlap
+        diar = [
+            DiarizationSegment(start=0.0, end=1.5, speaker=0),  # 0.5s overlap
+            DiarizationSegment(start=1.0, end=4.0, speaker=1),  # 2.0s overlap
+        ]
+
+        result_segments, speakers = assign_speakers(segments, diar)
+
+        assert result_segments[0].speaker_id == 0  # remapped from 1 to 0
+        # speaker 1 has maximum overlap, but after remapping it becomes 0
+        # (only one unique speaker in the result since speaker 0 has less overlap)
+
+    def test_no_overlap_assigns_none(self):
+        """test segment with no overlapping diarization"""
+        segments = [
+            TranscriptSegment(id=0, start=10.0, end=12.0, text="No overlap"),
+        ]
+        diar = [
+            DiarizationSegment(start=0.0, end=5.0, speaker=0),
+        ]
+
+        result_segments, speakers = assign_speakers(segments, diar)
+
+        assert result_segments[0].speaker_id is None
+        assert speakers == []
+
+    def test_speaker_labels(self):
+        """test speaker label generation"""
+        segments = [
+            TranscriptSegment(id=0, start=0.0, end=2.0, text="A"),
+            TranscriptSegment(id=1, start=3.0, end=5.0, text="B"),
+        ]
+        diar = [
+            DiarizationSegment(start=0.0, end=2.5, speaker=0),
+            DiarizationSegment(start=2.5, end=5.5, speaker=1),
+        ]
+
+        _, speakers = assign_speakers(segments, diar)
+
+        assert speakers[0] == {"id": 0, "label": "Speaker 1"}
+        assert speakers[1] == {"id": 1, "label": "Speaker 2"}

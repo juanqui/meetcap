@@ -7,7 +7,7 @@ Offline meeting recorder & summarizer for macOS
 - Records both system audio and microphone simultaneously
 - 100% offline operation - no network connections
 - Local transcription using Whisper
-- Local summarization using Qwen3-4B via llama.cpp
+- Local summarization using Qwen3.5-4B via MLX (Apple Silicon native)
 - Simple CLI workflow: start recording → stop with hotkey → get transcript & summary
 
 ## Installation
@@ -49,7 +49,7 @@ Offline meeting recorder & summarizer for macOS
 4. **Models** (selected and downloaded during setup):
    - **Whisper models**: large-v3 (default), large-v3-turbo, or small
    - **Vosk models** (with speaker identification): small (507MB), standard (1.8GB), or gigaspeech (3.3GB)
-   - **LLM models**: Qwen3-4B-Thinking (default), Qwen3-4B-Instruct, or GPT-OSS-20B
+   - **LLM models**: Qwen3.5-4B (default, ~2.9GB), Qwen3.5-9B (~5.6GB)
 
 ### Install meetcap
 
@@ -156,7 +156,6 @@ Edit `~/.meetcap/config.toml` to customize:
 - Default audio device
 - STT engine selection (faster-whisper, mlx-whisper, vosk)
 - Model settings (defaults to auto-downloaded models)
-- LLM context size (16k, 32k, 64k, or 128k tokens)
 - Hotkey combinations
 - Output directories
 
@@ -189,27 +188,6 @@ meetcap supports multiple speech-to-text engines:
    ```
 
 Speaker identification improves summaries by attributing statements to specific speakers.
-
-#### Context Size Settings
-
-The LLM context size determines how much transcript text can be processed at once:
-- **16k tokens**: ~30 minute meetings
-- **32k tokens**: ~1 hour meetings (default)
-- **64k tokens**: ~2 hour meetings
-- **128k tokens**: 3+ hour meetings
-
-You can configure this during `meetcap setup` or manually edit `~/.meetcap/config.toml`:
-```toml
-[llm]
-n_ctx = 32768  # Context size in tokens
-```
-
-**Automatic Batching**: When a transcript exceeds the configured context size, meetcap automatically:
-1. Splits the transcript into overlapping chunks that fit within the context
-2. Generates summaries for each chunk independently
-3. Merges all chunk summaries into a final comprehensive summary
-
-This ensures even very long meetings (4+ hours) can be processed, though larger context sizes provide better results by maintaining more continuity.
 
 ## Permissions
 

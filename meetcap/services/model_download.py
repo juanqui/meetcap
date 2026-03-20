@@ -130,138 +130,28 @@ def verify_whisper_model(
         return False
 
 
-def download_gguf_model(
-    model_url: str,
-    model_name: str,
-    models_dir: Path | None = None,
-    force_download: bool = False,
-) -> Path | None:
+def ensure_mlx_llm_model(
+    model_name: str = "mlx-community/Qwen3.5-4B-MLX-4bit",
+) -> bool:
     """
-    download a GGUF model from a direct URL.
+    ensure mlx llm model is available, downloading if necessary via huggingface_hub.
 
     args:
-        model_url: direct URL to the GGUF file
-        model_name: name for the local file
-        models_dir: directory to store models (default: ~/.meetcap/models)
-        force_download: force re-download even if exists
+        model_name: huggingface repo id for the mlx model
 
     returns:
-        path to downloaded model or None if failed
+        True if model is available, False if download failed
     """
-    if models_dir is None:
-        models_dir = Path.home() / ".meetcap" / "models"
-
-    models_dir = models_dir.expanduser()
-    models_dir.mkdir(parents=True, exist_ok=True)
-
-    model_path = models_dir / model_name
-
-    # check if already exists
-    if model_path.exists() and not force_download:
-        file_size_mb = model_path.stat().st_size / (1024 * 1024)
-        console.print(
-            f"[green]✓[/green] GGUF model already exists: {model_path.name} ({file_size_mb:.1f} MB)"
-        )
-        return model_path
-
-    console.print(f"[cyan]downloading GGUF model '{model_name}'...[/cyan]")
-    console.print(f"[dim]from: {model_url[:80]}...[/dim]")
-    console.print("[yellow]this may take several minutes depending on your connection[/yellow]")
-
     try:
-        # create a temporary file first
-        temp_path = model_path.with_suffix(".tmp")
+        from huggingface_hub import snapshot_download
 
-        # setup progress tracking
-        with Progress(
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            DownloadColumn(),
-            TimeRemainingColumn(),
-            console=console,
-            transient=False,
-        ) as progress:
-            # get file size first
-            with urllib.request.urlopen(model_url) as response:
-                total_size = int(response.headers.get("Content-Length", 0))
-
-                if total_size == 0:
-                    console.print("[yellow]warning: cannot determine file size[/yellow]")
-
-                task = progress.add_task(
-                    f"downloading {model_name}", total=total_size if total_size > 0 else None
-                )
-
-                # download in chunks
-                chunk_size = 8192 * 16  # 128KB chunks
-                downloaded = 0
-
-                with open(temp_path, "wb") as f:
-                    while True:
-                        chunk = response.read(chunk_size)
-                        if not chunk:
-                            break
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        progress.update(task, completed=downloaded)
-
-        # move temp file to final location
-        temp_path.rename(model_path)
-
-        file_size_mb = model_path.stat().st_size / (1024 * 1024)
-        console.print(
-            f"[green]✓[/green] model downloaded: {model_path.name} ({file_size_mb:.1f} MB)"
-        )
-        return model_path
-
+        console.print(f"[cyan]ensuring mlx llm model '{model_name}' is available...[/cyan]")
+        snapshot_download(model_name)
+        console.print(f"[green]✓[/green] mlx llm model ready: {model_name}")
+        return True
     except Exception as e:
-        console.print(f"[red]error downloading model:[/red] {e}")
-        # cleanup temp file if exists
-        if temp_path.exists():
-            temp_path.unlink()
-        return None
-
-
-def ensure_qwen_model(
-    models_dir: Path | None = None,
-    force_download: bool = False,
-    model_choice: str = "thinking",
-) -> Path | None:
-    """
-    ensure Qwen3-4B GGUF model is available, downloading if necessary.
-
-    args:
-        models_dir: directory to store models (default: ~/.meetcap/models)
-        force_download: force re-download even if exists
-        model_choice: which model variant ('thinking', 'instruct', 'gpt-oss')
-
-    returns:
-        path to model file or None if failed
-    """
-    # model choices
-    models = {
-        "thinking": {
-            "url": "https://huggingface.co/unsloth/Qwen3-4B-Thinking-2507-GGUF/resolve/main/Qwen3-4B-Thinking-2507-UD-Q8_K_XL.gguf",
-            "name": "Qwen3-4B-Thinking-2507-Q8_K_XL.gguf",
-            "size": "~4-5GB",
-        },
-        "instruct": {
-            "url": "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-UD-Q8_K_XL.gguf",
-            "name": "Qwen3-4B-Instruct-2507-Q8_K_XL.gguf",
-            "size": "~4-5GB",
-        },
-        "gpt-oss": {
-            "url": "https://huggingface.co/unsloth/gpt-oss-20b-GGUF/resolve/main/gpt-oss-20b-Q4_K_M.gguf",
-            "name": "gpt-oss-20b-Q4_K_M.gguf",
-            "size": "~11GB",
-        },
-    }
-
-    if model_choice not in models:
-        model_choice = "thinking"  # default
-
-    model_info = models[model_choice]
-    return download_gguf_model(model_info["url"], model_info["name"], models_dir, force_download)
+        console.print(f"[red]error downloading mlx llm model:[/red] {e}")
+        return False
 
 
 def ensure_mlx_whisper_model(
@@ -446,39 +336,45 @@ def verify_mlx_whisper_model(
         return False
 
 
-def verify_qwen_model(
-    models_dir: Path | None = None,
+def verify_mlx_llm_model(
+    model_name: str = "mlx-community/Qwen3.5-4B-MLX-4bit",
 ) -> bool:
     """
-    verify Qwen GGUF model is available for use.
+    verify mlx llm model is available for use.
 
     args:
-        models_dir: directory where models are stored
+        model_name: huggingface repo id for the mlx model
 
     returns:
         true if model is available
     """
-    if models_dir is None:
-        models_dir = Path.home() / ".meetcap" / "models"
+    import importlib.util
+    import platform
 
-    models_dir = models_dir.expanduser()
-    model_path = models_dir / "Qwen3-4B-Thinking-2507-Q8_K_XL.gguf"
+    # check if running on apple silicon
+    if platform.processor() != "arm":
+        console.print("[yellow]⚠[/yellow] mlx-vlm requires Apple Silicon (M1/M2/M3/M4)")
+        return False
 
-    if model_path.exists():
-        file_size_mb = model_path.stat().st_size / (1024 * 1024)
-        # GGUF files should be at least a few hundred MB
-        if file_size_mb > 100:
-            console.print(
-                f"[green]✓[/green] Qwen model ready: {model_path.name} ({file_size_mb:.1f} MB)"
-            )
+    # check if mlx_vlm is installed
+    if importlib.util.find_spec("mlx_vlm") is None:
+        console.print("[yellow]⚠[/yellow] mlx-vlm not installed")
+        return False
+
+    # check if model is cached locally
+    try:
+        from huggingface_hub import try_to_load_from_cache
+
+        # check for config.json as a proxy for the full model
+        result = try_to_load_from_cache(model_name, "config.json")
+        if result is not None and not isinstance(result, type(None)):
+            console.print(f"[green]✓[/green] mlx llm model ready: {model_name}")
             return True
         else:
-            console.print(
-                f"[yellow]⚠[/yellow] Qwen model file seems too small ({file_size_mb:.1f} MB)"
-            )
+            console.print(f"[yellow]⚠[/yellow] mlx llm model not cached: {model_name}")
             return False
-    else:
-        console.print("[yellow]⚠[/yellow] Qwen model not found")
+    except Exception as e:
+        console.print(f"[red]✗[/red] mlx llm model verification failed: {e}")
         return False
 
 

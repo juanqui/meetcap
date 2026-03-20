@@ -10,11 +10,10 @@ from unittest.mock import Mock, patch
 import pytest
 
 # Import mock models
-from tests.mock_models import mock_faster_whisper, mock_llama_cpp
+from tests.mock_models import mock_faster_whisper
 
 # Install mock modules globally for tests
 sys.modules["faster_whisper"] = mock_faster_whisper
-sys.modules["llama_cpp"] = mock_llama_cpp
 
 
 @pytest.fixture
@@ -72,8 +71,7 @@ def mock_config_data():
         "models": {
             "stt_model": "large-v3",
             "stt_model_path": "~/.meetcap/models/whisper",
-            "llm_model": "qwen3-4b-thinking",
-            "llm_gguf_path": "~/.meetcap/models/llm/qwen3-4b.gguf",
+            "llm_model_name": "mlx-community/Qwen3.5-4B-MLX-4bit",
         },
         "paths": {
             "out_dir": "~/Recordings",
@@ -116,9 +114,6 @@ def reset_environment():
         "MEETCAP_ENABLE_DIARIZATION",
         "MEETCAP_LLM_MODEL",
         "MEETCAP_OUT_DIR",
-        "MEETCAP_N_CTX",
-        "MEETCAP_N_THREADS",
-        "MEETCAP_N_GPU_LAYERS",
         # Memory management env vars
         "MEETCAP_MEMORY_AGGRESSIVE_GC",
         "MEETCAP_MEMORY_MONITORING",
@@ -174,17 +169,6 @@ def mock_faster_whisper():
 
     with patch.dict("sys.modules", {"faster_whisper": mock_module}):
         yield mock_module, mock_whisper_model
-
-
-@pytest.fixture
-def mock_llama_cpp():
-    """mock llama-cpp-python module for testing"""
-    mock_module = Mock()
-    mock_llama = Mock()
-    mock_module.Llama = mock_llama
-
-    with patch.dict("sys.modules", {"llama_cpp": mock_module}):
-        yield mock_module, mock_llama
 
 
 @pytest.fixture

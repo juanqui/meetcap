@@ -1,4 +1,4 @@
-"""llm-based meeting summarization using qwen3 via llama.cpp"""
+"""llm-based meeting summarization using qwen3.5 via mlx-vlm"""
 
 import re
 import time
@@ -9,94 +9,81 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 
 console = Console()
 
+# fixed chunking constants (chars, not tokens)
+CHUNK_THRESHOLD = 500_000
+CHUNK_SIZE = 400_000
+
 
 class SummarizationService:
-    """generate meeting summaries using local llm"""
+    """generate meeting summaries using local llm via mlx-vlm"""
 
     def __init__(
         self,
-        model_path: str,
-        n_ctx: int = 32768,
-        n_threads: int = 6,
-        n_gpu_layers: int = 35,
-        n_batch: int = 1024,
+        model_name: str = "mlx-community/Qwen3.5-4B-MLX-4bit",
         temperature: float = 0.4,
-        max_tokens: int = 4096,  # increased for more detailed summaries
-        seed: int | None = None,
+        max_tokens: int = 4096,
+        enable_thinking: bool = False,
+        thinking_budget: int = 512,
     ):
         """
         initialize summarization service.
 
         args:
-            model_path: path to qwen3 gguf model file
-            n_ctx: context window size
-            n_threads: number of cpu threads
-            n_gpu_layers: layers to offload to gpu (metal)
-            n_batch: batch size for prompt processing
+            model_name: huggingface repo id for the mlx model
             temperature: sampling temperature (0.2-0.6 recommended)
             max_tokens: max tokens to generate
-            seed: random seed for reproducibility
+            enable_thinking: enable thinking mode (model reasons before answering)
+            thinking_budget: max tokens for the thinking block (when enabled)
         """
-        self.model_path = Path(model_path)
-        if not self.model_path.exists():
-            raise FileNotFoundError(f"model not found: {model_path}")
-
-        self.n_ctx = n_ctx
-        self.n_threads = n_threads
-        self.n_gpu_layers = n_gpu_layers
-        self.n_batch = n_batch
+        self.model_name = model_name
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self.seed = seed
-        self.llm = None
+        self.enable_thinking = enable_thinking
+        self.thinking_budget = thinking_budget
+        self.model = None
+        self.processor = None
+        self.model_config = None
 
-    def _load_model(self):
+    def _load_model(self) -> None:
         """lazy load the llm model."""
-        if self.llm is not None:
+        if self.model is not None:
             return
 
         try:
-            from llama_cpp import Llama
+            from mlx_vlm import load
+            from mlx_vlm.utils import load_config
         except ImportError as e:
             raise ImportError(
-                "llama-cpp-python not installed. "
-                "install with metal support: "
-                "CMAKE_ARGS='-DLLAMA_METAL=on' pip install llama-cpp-python"
+                "mlx-vlm not installed. install with: pip install 'mlx-vlm[torch]>=0.4.0'"
             ) from e
 
-        console.print(f"[cyan]loading llm model from {self.model_path.name}...[/cyan]")
+        console.print(f"[cyan]loading llm model {self.model_name}...[/cyan]")
 
-        # initialize llama with metal support
-        self.llm = Llama(
-            model_path=str(self.model_path),
-            n_ctx=self.n_ctx,
-            n_threads=self.n_threads,
-            n_gpu_layers=self.n_gpu_layers,
-            n_batch=self.n_batch,
-            seed=self.seed if self.seed is not None else -1,
-            verbose=False,
-        )
+        self.model_config = load_config(self.model_name)
+        self.model, self.processor = load(self.model_name)
 
     def load_model(self) -> None:
         """explicitly load the llm model."""
         self._load_model()
 
     def unload_model(self) -> None:
-        """unload llama-cpp-python model and cleanup resources."""
-        if self.llm is not None:
-            # llama-cpp-python handles cleanup in destructor
-            del self.llm
-            self.llm = None
+        """unload mlx-vlm model and cleanup resources."""
+        if self.model is not None:
+            del self.model
+            del self.processor
+            self.model = None
+            self.processor = None
+            self.model_config = None
 
-            # Clear Metal/GPU cache if available
+            # clear mlx cache
             try:
                 import mlx.core as mx
 
-                mx.metal.clear_cache()
+                mx.clear_cache()
             except (ImportError, AttributeError):
                 pass
 
-            # Force garbage collection
+            # force garbage collection
             import gc
 
             gc.collect()
@@ -105,24 +92,7 @@ class SummarizationService:
 
     def is_loaded(self) -> bool:
         """check if model is currently loaded."""
-        return self.llm is not None
-
-    def get_memory_usage(self) -> dict:
-        """return current memory usage statistics."""
-        try:
-            import os
-
-            import psutil
-
-            process = psutil.Process(os.getpid())
-            memory_info = process.memory_info()
-            return {
-                "rss_mb": memory_info.rss / 1024 / 1024,  # Physical memory
-                "vms_mb": memory_info.vms / 1024 / 1024,  # Virtual memory
-                "percent": process.memory_percent(),
-            }
-        except ImportError:
-            return {"rss_mb": 0, "vms_mb": 0, "percent": 0}
+        return self.model is not None
 
     def summarize(
         self,
@@ -152,32 +122,31 @@ class SummarizationService:
 
         # prepare prompt for detailed summary
         if has_speaker_info:
-            # enhanced prompt when speaker information is available
             system_prompt = (
-                "you are an expert meeting note-taker who creates comprehensive, actionable meeting summaries. "
+                "you are a world-class executive assistant who creates comprehensive, actionable meeting summaries. "
                 "the transcript includes speaker labels (e.g., [Speaker 1], [Speaker 2]). "
                 "analyze the transcript and produce detailed notes with these exact sections:\n\n"
                 "## Meeting Title\n"
                 "generate a concise title (2-4 words) that captures the main topic of the meeting.\n"
                 "the title should be in PascalCase with no spaces (e.g., 'ProductRoadmap', 'TeamRetrospective').\n"
                 "write only the title on a single line, nothing else in this section.\n\n"
-                "## Participants\n"
-                "list the speakers identified in the transcript:\n"
-                "- note their key contributions or roles in the discussion\n"
-                "- identify who led the meeting if apparent\n\n"
                 "## Summary\n"
                 "provide a comprehensive 3-5 paragraph summary covering:\n"
                 "- main topics discussed and context\n"
                 "- key points raised by specific speakers\n"
                 "- important details, data, or examples mentioned\n"
                 "- overall meeting outcome and next steps\n\n"
+                "## Participants\n"
+                "list the speakers identified in the transcript:\n"
+                "- note their key contributions or roles in the discussion\n"
+                "- identify who led the meeting if apparent\n\n"
                 "## Key Discussion Points\n"
                 "list 5-10 bullet points of the most important topics discussed:\n"
                 "- include specific details and context for each point\n"
                 "- attribute key points to specific speakers when relevant\n"
                 "- note any disagreements or alternative viewpoints between speakers\n"
                 "- highlight critical information or insights shared\n\n"
-                "## Decisions\n"
+                "## Decisions Made\n"
                 "list all decisions made during the meeting:\n"
                 "- be specific about what was decided\n"
                 "- include rationale if discussed\n"
@@ -192,6 +161,8 @@ class SummarizationService:
                 "- if no action items, write 'no action items identified'\n\n"
                 "## Notable Quotes\n"
                 "include 2-3 important verbatim quotes with speaker attribution\n\n"
+                "## Meeting Tone\n"
+                "briefly describe the overall tone and energy of the meeting.\n\n"
                 "IMPORTANT GUIDELINES:\n"
                 "- DO NOT attempt to identify or include the actual names of meeting participants. "
                 "The transcription system is unreliable with names, so refer to speakers only by their labels (e.g., 'Speaker 1', 'Speaker 2').\n"
@@ -201,9 +172,8 @@ class SummarizationService:
                 "do not include any thinking tags or meta-commentary."
             )
         else:
-            # standard prompt without speaker information
             system_prompt = (
-                "you are an expert meeting note-taker who creates comprehensive, actionable meeting summaries. "
+                "you are a world-class executive assistant who creates comprehensive, actionable meeting summaries. "
                 "analyze the transcript and produce detailed notes with these exact sections:\n\n"
                 "## Meeting Title\n"
                 "generate a concise title (2-4 words) that captures the main topic of the meeting.\n"
@@ -215,12 +185,14 @@ class SummarizationService:
                 "- key points raised by participants\n"
                 "- important details, data, or examples mentioned\n"
                 "- overall meeting outcome and next steps\n\n"
+                "## Participants\n"
+                "list any participants mentioned or implied in the transcript.\n\n"
                 "## Key Discussion Points\n"
                 "list 5-10 bullet points of the most important topics discussed:\n"
                 "- include specific details and context for each point\n"
                 "- note any disagreements or alternative viewpoints\n"
                 "- highlight critical information or insights shared\n\n"
-                "## Decisions\n"
+                "## Decisions Made\n"
                 "list all decisions made during the meeting:\n"
                 "- be specific about what was decided\n"
                 "- include rationale if discussed\n"
@@ -235,6 +207,8 @@ class SummarizationService:
                 "- if no action items, write 'no action items identified'\n\n"
                 "## Notable Quotes\n"
                 "include 2-3 important verbatim quotes that capture key insights or decisions\n\n"
+                "## Meeting Tone\n"
+                "briefly describe the overall tone and energy of the meeting.\n\n"
                 "IMPORTANT GUIDELINES:\n"
                 "- DO NOT attempt to identify or include the actual names of meeting participants. "
                 "The transcription system is unreliable with names, so refer to participants generically (e.g., 'one participant mentioned', 'a team member noted').\n"
@@ -271,8 +245,8 @@ class SummarizationService:
 
         # chunk if needed
         summaries = []
-        if len(user_prompt) > self.n_ctx * 3:  # rough estimate: ~4 chars per token
-            chunks = self._chunk_transcript(transcript_text, chunk_size=self.n_ctx * 2)
+        if len(user_prompt) > CHUNK_THRESHOLD:
+            chunks = self._chunk_transcript(transcript_text, chunk_size=CHUNK_SIZE)
 
             with Progress(
                 SpinnerColumn(),
@@ -324,35 +298,63 @@ class SummarizationService:
         returns:
             generated summary text
         """
-        # format messages for chat completion
+        from mlx_vlm import generate
+
+        # use the tokenizer's apply_chat_template — it properly handles
+        # system messages and the enable_thinking flag for Qwen3.5.
+        # mlx-vlm's apply_chat_template drops both of these.
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
-
-        # generate response
-        response = self.llm.create_chat_completion(
-            messages=messages,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-            stop=["<|endoftext|>", "<|im_end|>"],  # qwen stop tokens
+        prompt = self.processor.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=self.enable_thinking,
         )
 
-        raw_output = response["choices"][0]["message"]["content"].strip()
+        # build generate kwargs
+        gen_kwargs = {
+            "max_tokens": self.max_tokens,
+            "temp": self.temperature,
+        }
 
-        # debug: log if thinking tags are detected
-        if "<think" in raw_output.lower() or "</think" in raw_output.lower():
-            console.print("[dim]detected thinking tags in output, cleaning...[/dim]")
-            # optionally log first 200 chars for debugging
-            # console.print(f"[dim]raw start: {raw_output[:200]}...[/dim]")
+        # when thinking is enabled, use mlx-vlm's thinking budget control
+        # to cap the reasoning tokens and prevent over-thinking loops
+        if self.enable_thinking:
+            gen_kwargs["enable_thinking"] = True
+            gen_kwargs["thinking_budget"] = self.thinking_budget
+            gen_kwargs["thinking_start_token"] = "<think>"
+            gen_kwargs["thinking_end_token"] = "</think>"
 
-        cleaned_output = self._clean_thinking_tags(raw_output)
+        # generate response
+        result = generate(
+            self.model,
+            self.processor,
+            prompt,
+            **gen_kwargs,
+        )
+
+        # extract text from result
+        if hasattr(result, "text"):
+            raw_output = result.text.strip()
+        elif isinstance(result, str):
+            raw_output = result.strip()
+        else:
+            raw_output = str(result).strip()
+
+        # clean thinking tags if present (safety net for when thinking is enabled)
+        if self.enable_thinking:
+            if "<think" in raw_output.lower() or "</think" in raw_output.lower():
+                console.print("[dim]detected thinking tags in output, cleaning...[/dim]")
+            raw_output = self._clean_thinking_tags(raw_output)
 
         # warn if output seems empty after cleaning
-        if not cleaned_output or len(cleaned_output) < 10:
+        if not raw_output or len(raw_output) < 10:
             console.print("[yellow]⚠ output seems very short after cleaning[/yellow]")
 
-        return cleaned_output
+        return raw_output
 
     def _clean_thinking_tags(self, text: str) -> str:
         """
@@ -428,13 +430,14 @@ class SummarizationService:
         return chunks
 
 
-def save_summary(summary_text: str, base_path: Path) -> Path:
+def save_summary(summary_text: str, base_path: Path, transcript_text: str = "") -> Path:
     """
     save summary to markdown file.
 
     args:
         summary_text: generated summary markdown
         base_path: base path without extension
+        transcript_text: optional transcript text to append
 
     returns:
         path to saved summary file
@@ -460,6 +463,10 @@ def save_summary(summary_text: str, base_path: Path) -> Path:
     )
 
     final_content = header + summary_text
+
+    # append full transcript if provided
+    if transcript_text:
+        final_content += "\n\n---\n\n## Full Transcript\n\n" + transcript_text
 
     with open(summary_path, "w", encoding="utf-8") as f:
         f.write(final_content)

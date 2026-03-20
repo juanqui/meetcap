@@ -13,159 +13,257 @@ from meetcap.services.summarization import SummarizationService, extract_meeting
 class TestSummarizationService:
     """test summarization service functionality"""
 
-    @pytest.fixture
-    def model_file(self, temp_dir):
-        """create mock model file"""
-        model_path = temp_dir / "qwen3.gguf"
-        model_path.write_bytes(b"fake model data")
-        return model_path
-
-    @pytest.fixture
-    def mock_llama(self):
-        """mock Llama class"""
-        with patch("meetcap.services.summarization.Llama") as mock:
-            yield mock
-
-    def test_init_success(self, model_file):
-        """test successful initialization"""
+    def test_init_stores_model_name(self):
+        """test initialization stores model_name"""
         service = SummarizationService(
-            model_path=str(model_file),
-            n_ctx=4096,
-            n_threads=4,
-            n_gpu_layers=20,
-            n_batch=512,
+            model_name="mlx-community/Qwen3.5-4B-MLX-4bit",
             temperature=0.3,
             max_tokens=2048,
-            seed=42,
         )
 
-        assert service.model_path == model_file
-        assert service.n_ctx == 4096
-        assert service.n_threads == 4
-        assert service.n_gpu_layers == 20
-        assert service.n_batch == 512
+        assert service.model_name == "mlx-community/Qwen3.5-4B-MLX-4bit"
         assert service.temperature == 0.3
         assert service.max_tokens == 2048
-        assert service.seed == 42
-        assert service.llm is None  # lazy loading
+        assert service.model is None  # lazy loading
+        assert service.processor is None
+        assert service.model_config is None
 
-    def test_init_model_not_found(self):
-        """test initialization with missing model"""
-        with pytest.raises(FileNotFoundError, match="model not found"):
-            SummarizationService(model_path="/nonexistent/model.gguf")
+    def test_init_default_values(self):
+        """test initialization with default values"""
+        service = SummarizationService()
 
-    def test_load_model_import_error(self, model_file):
-        """test handling of missing llama-cpp-python"""
-        with patch("builtins.__import__", side_effect=ImportError):
-            service = SummarizationService(model_path=str(model_file))
+        assert service.model_name == "mlx-community/Qwen3.5-4B-MLX-4bit"
+        assert service.temperature == 0.4
+        assert service.max_tokens == 4096
+        assert service.model is None
 
-            with pytest.raises(ImportError, match="llama-cpp-python not installed"):
+    @patch("meetcap.services.summarization.console")
+    def test_load_model_lazy(self, mock_console):
+        """test lazy loading via mlx_vlm.load"""
+        mock_model = Mock()
+        mock_processor = Mock()
+        mock_config = Mock()
+
+        with patch("mlx_vlm.load", return_value=(mock_model, mock_processor)) as mock_load:
+            with patch("mlx_vlm.utils.load_config", return_value=mock_config) as mock_load_config:
+                service = SummarizationService(model_name="test-model")
                 service._load_model()
 
-    def test_load_model_success(self, model_file, mock_console):
-        """test successful model loading"""
-        from llama_cpp import Llama
+                assert service.model is mock_model
+                assert service.processor is mock_processor
+                assert service.model_config is mock_config
+                mock_load.assert_called_once_with("test-model")
+                mock_load_config.assert_called_once_with("test-model")
 
-        with patch.object(Llama, "__new__", return_value=Mock()) as mock_constructor:
-            service = SummarizationService(model_path=str(model_file))
-            service._load_model()
-
-            assert service.llm is not None
-            mock_constructor.assert_called_once()
-            call_kwargs = mock_constructor.call_args[1]
-            assert call_kwargs["model_path"] == str(model_file)
-            assert call_kwargs["n_ctx"] == 32768
-
-        # verify console output was called
-        # mock_console.print.assert_called() - skip console check for now
-
-    def test_load_model_with_seed(self, model_file):
-        """test model loading with custom seed"""
-        from llama_cpp import Llama
-
-        with patch.object(Llama, "__new__", return_value=Mock()) as mock_constructor:
-            service = SummarizationService(model_path=str(model_file), seed=123)
-            service._load_model()
-
-            call_kwargs = mock_constructor.call_args[1]
-            assert call_kwargs["seed"] == 123
-
-    def test_load_model_only_once(self, model_file):
+    @patch("meetcap.services.summarization.console")
+    def test_load_model_only_once(self, mock_console):
         """test model is only loaded once"""
-        from llama_cpp import Llama
+        mock_model = Mock()
+        mock_processor = Mock()
 
-        with patch.object(Llama, "__new__", return_value=Mock()) as mock_constructor:
-            service = SummarizationService(model_path=str(model_file))
+        with patch("mlx_vlm.load", return_value=(mock_model, mock_processor)) as mock_load:
+            with patch("mlx_vlm.utils.load_config", return_value=Mock()):
+                service = SummarizationService()
+                service._load_model()
+                service._load_model()  # second call
 
-            service._load_model()
-            service._load_model()  # second call
+                # should only be called once
+                mock_load.assert_called_once()
 
-            # should only be called once
-            mock_constructor.assert_called_once()
+    def test_load_model_import_error(self):
+        """test handling of missing mlx-vlm"""
+        service = SummarizationService()
 
-    def test_summarize_short_transcript(self, model_file, mock_console):
+        # mock the import to fail
+        import builtins
+
+        original_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "mlx_vlm":
+                raise ImportError("No module named 'mlx_vlm'")
+            if name == "mlx_vlm.utils":
+                raise ImportError("No module named 'mlx_vlm'")
+            return original_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=mock_import):
+            with pytest.raises(ImportError, match="mlx-vlm not installed"):
+                service._load_model()
+
+    @patch("meetcap.services.summarization.console")
+    def test_generate_summary(self, mock_console):
+        """test _generate_summary uses tokenizer's apply_chat_template and generate()"""
+        service = SummarizationService()
+        service.model = Mock()
+        service.processor = Mock()
+        service.processor.apply_chat_template.return_value = "formatted_prompt"
+        service.model_config = Mock()
+
+        mock_result = Mock()
+        mock_result.text = "## summary\n\nActual summary content"
+
+        with patch("mlx_vlm.generate", return_value=mock_result) as mock_gen:
+            result = service._generate_summary("system prompt", "user prompt")
+
+            # verify tokenizer's apply_chat_template was called with messages and enable_thinking
+            service.processor.apply_chat_template.assert_called_once()
+            call_kwargs = service.processor.apply_chat_template.call_args
+            messages = call_kwargs[0][0]  # first positional arg
+            assert messages[0]["role"] == "system"
+            assert messages[0]["content"] == "system prompt"
+            assert messages[1]["role"] == "user"
+            assert messages[1]["content"] == "user prompt"
+            assert call_kwargs[1]["enable_thinking"] is False  # default
+
+            # verify generate was called
+            mock_gen.assert_called_once()
+            gen_kwargs = mock_gen.call_args
+            assert gen_kwargs[1]["max_tokens"] == 4096
+            assert gen_kwargs[1]["temp"] == 0.4
+
+            assert "## summary" in result
+            assert "Actual summary content" in result
+
+    @patch("meetcap.services.summarization.console")
+    def test_generate_summary_string_result(self, mock_console):
+        """test _generate_summary when result is a string"""
+        service = SummarizationService()
+        service.model = Mock()
+        service.processor = Mock()
+        service.processor.apply_chat_template.return_value = "formatted"
+        service.model_config = Mock()
+
+        with patch("mlx_vlm.generate", return_value="## summary\n\nString result"):
+            result = service._generate_summary("system", "user")
+            assert "String result" in result
+
+    @patch("meetcap.services.summarization.console")
+    def test_generate_summary_fallback_str(self, mock_console):
+        """test _generate_summary when result needs str() conversion"""
+        service = SummarizationService()
+        service.model = Mock()
+        service.processor = Mock()
+        service.processor.apply_chat_template.return_value = "formatted"
+        service.model_config = Mock()
+
+        # object without .text attribute and not a string
+        class CustomResult:
+            def __str__(self):
+                return "## summary\n\nFallback result"
+
+        mock_result = CustomResult()
+
+        with patch("mlx_vlm.generate", return_value=mock_result):
+            result = service._generate_summary("system", "user")
+            assert "Fallback result" in result
+
+    @patch("meetcap.services.summarization.console")
+    def test_generate_summary_with_thinking_tags(self, mock_console):
+        """test summary generation removes thinking tags when thinking is enabled"""
+        service = SummarizationService(enable_thinking=True, thinking_budget=100)
+        service.model = Mock()
+        service.processor = Mock()
+        service.processor.apply_chat_template.return_value = "formatted"
+        service.model_config = Mock()
+
+        mock_result = Mock()
+        mock_result.text = "<think>I should analyze this</think>## summary\n\nActual summary"
+
+        with patch("mlx_vlm.generate", return_value=mock_result):
+            result = service._generate_summary("system", "user")
+
+            assert "<think" not in result
+            assert "## summary" in result
+            assert "Actual summary" in result
+
+    @patch("meetcap.services.summarization.console")
+    def test_generate_summary_empty_after_cleaning(self, mock_console):
+        """test warning when output is empty after cleaning"""
+        service = SummarizationService(enable_thinking=True, thinking_budget=100)
+        service.model = Mock()
+        service.processor = Mock()
+        service.processor.apply_chat_template.return_value = "formatted"
+        service.model_config = Mock()
+
+        mock_result = Mock()
+        mock_result.text = "<think>only thinking</think>"
+
+        with patch("mlx_vlm.generate", return_value=mock_result):
+            service._generate_summary("system", "user")
+
+            # verify warning about short output
+            calls = [str(call) for call in mock_console.print.call_args_list]
+            assert any("output seems very short" in call.lower() for call in calls)
+
+    @patch("meetcap.services.summarization.console")
+    def test_generate_summary_thinking_disabled_no_cleaning(self, mock_console):
+        """test that thinking tags are not cleaned when thinking is disabled"""
+        service = SummarizationService(enable_thinking=False)
+        service.model = Mock()
+        service.processor = Mock()
+        service.processor.apply_chat_template.return_value = "formatted"
+        service.model_config = Mock()
+
+        mock_result = Mock()
+        mock_result.text = "## summary\n\nDirect response without thinking"
+
+        with patch("mlx_vlm.generate", return_value=mock_result) as mock_gen:
+            result = service._generate_summary("system", "user")
+
+            # should not pass thinking params to generate
+            gen_kwargs = mock_gen.call_args[1]
+            assert "enable_thinking" not in gen_kwargs
+            assert "thinking_budget" not in gen_kwargs
+            assert "Direct response without thinking" in result
+
+    @patch("meetcap.services.summarization.console")
+    def test_generate_summary_thinking_enabled_passes_params(self, mock_console):
+        """test that thinking params are passed to generate() when enabled"""
+        service = SummarizationService(enable_thinking=True, thinking_budget=256)
+        service.model = Mock()
+        service.processor = Mock()
+        service.processor.apply_chat_template.return_value = "formatted"
+        service.model_config = Mock()
+
+        mock_result = Mock()
+        mock_result.text = "<think>brief thought</think>## summary\n\nContent"
+
+        with patch("mlx_vlm.generate", return_value=mock_result) as mock_gen:
+            result = service._generate_summary("system", "user")
+
+            gen_kwargs = mock_gen.call_args[1]
+            assert gen_kwargs["enable_thinking"] is True
+            assert gen_kwargs["thinking_budget"] == 256
+            assert gen_kwargs["thinking_start_token"] == "<think>"
+            assert gen_kwargs["thinking_end_token"] == "</think>"
+            assert "Content" in result
+
+    @patch("meetcap.services.summarization.console")
+    def test_summarize_short_transcript(self, mock_console):
         """test summarizing short transcript"""
-        service = SummarizationService(model_path=str(model_file))
+        service = SummarizationService()
+        service.model = Mock()
+        service.processor = Mock()
+        service.processor.apply_chat_template.return_value = "formatted"
+        service.model_config = Mock()
 
-        # Mock the llm directly
-        mock_llm_instance = Mock()
-        mock_llm_instance.create_chat_completion.return_value = {
-            "choices": [
-                {
-                    "message": {
-                        "content": "## summary\n\nTest summary content\n\n## key discussion points\n\n- Point 1"
-                    }
-                }
-            ]
-        }
-        service.llm = mock_llm_instance
-
-        transcript = "This is a short test transcript."
-        summary = service.summarize(
-            transcript, meeting_title="Test Meeting", attendees=["Alice", "Bob"]
+        mock_result = Mock()
+        mock_result.text = (
+            "## summary\n\nTest summary content\n\n## key discussion points\n\n- Point 1"
         )
 
-        assert "## summary" in summary
-        assert "Test summary content" in summary
-        assert "## key discussion points" in summary
+        with patch("mlx_vlm.generate", return_value=mock_result):
+            transcript = "This is a short test transcript."
+            summary = service.summarize(
+                transcript, meeting_title="Test Meeting", attendees=["Alice", "Bob"]
+            )
 
-        # verify llm was called
-        mock_llm_instance.create_chat_completion.assert_called_once()
-        call_args = mock_llm_instance.create_chat_completion.call_args
+            assert "## summary" in summary
+            assert "Test summary content" in summary
 
-        messages = call_args[1]["messages"]
-        assert len(messages) == 2
-        assert messages[0]["role"] == "system"
-        assert messages[1]["role"] == "user"
-        assert "Test Meeting" in messages[1]["content"]
-        assert "Alice, Bob" in messages[1]["content"]
-
-    def test_summarize_long_transcript_chunking(self, model_file, mock_console):
-        """test summarizing long transcript with chunking"""
-        service = SummarizationService(
-            model_path=str(model_file),
-            n_ctx=100,  # very small to force chunking
-        )
-
-        # Mock the llm directly - make it return the same response for all calls
-        mock_llm_instance = Mock()
-        mock_llm_instance.create_chat_completion.return_value = {
-            "choices": [{"message": {"content": "## summary\n\nFinal merged summary"}}]
-        }
-        service.llm = mock_llm_instance
-
-        # create long transcript
-        transcript = " ".join(["word"] * 1000)
-        summary = service.summarize(transcript)
-
-        assert "Final merged summary" in summary
-
-        # should have called llm multiple times for chunking
-        assert mock_llm_instance.create_chat_completion.call_count >= 2
-
-    def test_clean_thinking_tags_standard(self, model_file):
+    def test_clean_thinking_tags_standard(self):
         """test cleaning standard thinking tags"""
-        service = SummarizationService(model_path=str(model_file))
+        service = SummarizationService()
 
         test_cases = [
             ("<think>thinking content</think>actual summary", "actual summary"),
@@ -179,9 +277,9 @@ class TestSummarizationService:
             result = service._clean_thinking_tags(input_text)
             assert result == expected
 
-    def test_clean_thinking_tags_malformed(self, model_file):
+    def test_clean_thinking_tags_malformed(self):
         """test cleaning malformed thinking tags"""
-        service = SummarizationService(model_path=str(model_file))
+        service = SummarizationService()
 
         # missing opening tag
         result = service._clean_thinking_tags("some thinking</think>actual content")
@@ -195,80 +293,34 @@ class TestSummarizationService:
         result = service._clean_thinking_tags("<think>outer<think>inner</think></think>content")
         assert result == "content"
 
-    def test_clean_thinking_tags_multiple(self, model_file):
+    def test_clean_thinking_tags_multiple(self):
         """test cleaning multiple thinking tags"""
-        service = SummarizationService(model_path=str(model_file))
+        service = SummarizationService()
 
         text = "<think>first</think>content1<thinking>second</thinking>content2"
         result = service._clean_thinking_tags(text)
         assert result == "content1content2"
 
-    def test_clean_thinking_tags_with_attributes(self, model_file):
+    def test_clean_thinking_tags_with_attributes(self):
         """test cleaning tags with attributes"""
-        service = SummarizationService(model_path=str(model_file))
+        service = SummarizationService()
 
         text = '<think type="deep">thinking</think>summary'
         result = service._clean_thinking_tags(text)
         assert result == "summary"
 
-    def test_clean_thinking_tags_whitespace(self, model_file):
+    def test_clean_thinking_tags_whitespace(self):
         """test whitespace cleanup after tag removal"""
-        service = SummarizationService(model_path=str(model_file))
+        service = SummarizationService()
 
         text = "<think>thinking</think>\n\n\n\n## summary"
         result = service._clean_thinking_tags(text)
         assert result == "## summary"
         assert not result.startswith("\n")
 
-    def test_generate_summary_with_thinking_tags(self, model_file):
-        """test summary generation removes thinking tags"""
-        service = SummarizationService(model_path=str(model_file))
-
-        # Mock the llm directly
-        mock_llm_instance = Mock()
-        mock_llm_instance.create_chat_completion.return_value = {
-            "choices": [
-                {
-                    "message": {
-                        "content": "<think>I should analyze this</think>## summary\n\nActual summary"
-                    }
-                }
-            ]
-        }
-        service.llm = mock_llm_instance
-
-        with patch("meetcap.services.summarization.console") as mock_console:
-            result = service._generate_summary("system", "user")
-
-            assert "<think" not in result
-            assert "## summary" in result
-            assert "Actual summary" in result
-
-            # verify console warning about thinking tags
-            calls = [str(call) for call in mock_console.print.call_args_list]
-            assert any("thinking tags" in call.lower() for call in calls)
-
-    def test_generate_summary_empty_after_cleaning(self, model_file):
-        """test warning when output is empty after cleaning"""
-        service = SummarizationService(model_path=str(model_file))
-
-        # Mock the llm directly
-        mock_llm_instance = Mock()
-        mock_llm_instance.create_chat_completion.return_value = {
-            "choices": [{"message": {"content": "<think>only thinking</think>"}}]
-        }
-        service.llm = mock_llm_instance
-
-        with patch("meetcap.services.summarization.console") as mock_console:
-            service._generate_summary("system", "user")
-
-            # verify warning about short output
-            calls = [str(call) for call in mock_console.print.call_args_list]
-            assert any("output seems very short" in call.lower() for call in calls)
-
-    def test_chunk_transcript(self, model_file):
+    def test_chunk_transcript(self):
         """test transcript chunking"""
-        service = SummarizationService(model_path=str(model_file))
+        service = SummarizationService()
 
         text = " ".join([f"word{i}" for i in range(100)])
         chunks = service._chunk_transcript(text, chunk_size=50)
@@ -283,9 +335,9 @@ class TestSummarizationService:
         assert all_words[0] == "word0"
         assert all_words[-1] == "word99"
 
-    def test_chunk_transcript_single_chunk(self, model_file):
+    def test_chunk_transcript_single_chunk(self):
         """test chunking with text smaller than chunk size"""
-        service = SummarizationService(model_path=str(model_file))
+        service = SummarizationService()
 
         text = "short text"
         chunks = service._chunk_transcript(text, chunk_size=100)
@@ -293,25 +345,28 @@ class TestSummarizationService:
         assert len(chunks) == 1
         assert chunks[0] == "short text"
 
-    def test_summarize_without_metadata(self, model_file):
-        """test summarizing without meeting title or attendees"""
-        service = SummarizationService(model_path=str(model_file))
+    @patch("meetcap.services.summarization.console")
+    def test_unload_model(self, mock_console):
+        """test model unloading"""
+        service = SummarizationService()
+        service.model = Mock()
+        service.processor = Mock()
+        service.model_config = Mock()
 
-        # Mock the llm directly
-        mock_llm_instance = Mock()
-        mock_llm_instance.create_chat_completion.return_value = {
-            "choices": [{"message": {"content": "## summary\n\nContent"}}]
-        }
-        service.llm = mock_llm_instance
-        summary = service.summarize("transcript text")
+        with patch("mlx.core.clear_cache"):
+            service.unload_model()
 
-        assert "## summary" in summary
+        assert service.model is None
+        assert service.processor is None
+        assert service.model_config is None
 
-        # verify no metadata in prompt
-        call_args = mock_llm_instance.create_chat_completion.call_args
-        user_content = call_args[1]["messages"][1]["content"]
-        assert "meeting:" not in user_content.lower()
-        assert "attendees:" not in user_content.lower()
+    def test_is_loaded(self):
+        """test is_loaded check"""
+        service = SummarizationService()
+        assert service.is_loaded() is False
+
+        service.model = Mock()
+        assert service.is_loaded() is True
 
 
 class TestSaveSummary:
@@ -366,6 +421,36 @@ No formal decisions made
             mock_console.print.assert_called()
             output = str(mock_console.print.call_args)
             assert "summary saved" in output.lower()
+
+    def test_save_summary_with_transcript_text(self, temp_dir):
+        """test saving summary with transcript_text appended"""
+        summary_text = "## summary\n\nTest summary"
+        transcript = "This is the full transcript content."
+
+        base_path = temp_dir / "meeting"
+
+        with patch("meetcap.services.summarization.console"):
+            result_path = save_summary(summary_text, base_path, transcript_text=transcript)
+
+            content = result_path.read_text()
+
+            # verify transcript section was appended
+            assert "## Full Transcript" in content
+            assert "This is the full transcript content." in content
+
+    def test_save_summary_without_transcript_text(self, temp_dir):
+        """test saving summary without transcript_text"""
+        summary_text = "## summary\n\nTest summary"
+
+        base_path = temp_dir / "meeting"
+
+        with patch("meetcap.services.summarization.console"):
+            result_path = save_summary(summary_text, base_path)
+
+            content = result_path.read_text()
+
+            # verify no transcript section
+            assert "## Full Transcript" not in content
 
     def test_save_summary_missing_structure(self, temp_dir):
         """test saving summary with missing structure"""
@@ -428,20 +513,19 @@ No formal decisions made
 class TestSummarizationIntegration:
     """integration tests for summarization"""
 
-    def test_full_summarization_flow(self, temp_dir, mock_console):
-        """test complete summarization flow"""
-        model_file = temp_dir / "model.gguf"
-        model_file.write_bytes(b"fake model")
+    @patch("meetcap.services.summarization.console")
+    def test_full_summarization_flow(self, mock_console, temp_dir):
+        """test complete summarization flow with thinking enabled"""
+        service = SummarizationService(
+            model_name="test-model", enable_thinking=True, thinking_budget=100
+        )
+        service.model = Mock()
+        service.processor = Mock()
+        service.processor.apply_chat_template.return_value = "formatted"
+        service.model_config = Mock()
 
-        service = SummarizationService(model_path=str(model_file))
-
-        # Mock the llm directly
-        mock_llm = Mock()
-        mock_llm.create_chat_completion.return_value = {
-            "choices": [
-                {
-                    "message": {
-                        "content": """<think>Let me analyze this transcript</think>
+        mock_result = Mock()
+        mock_result.text = """<think>Let me analyze this transcript</think>
 
 ## summary
 
@@ -464,40 +548,36 @@ Proceed with phase 2
 
 "This is a game changer"
 """
-                    }
-                }
-            ]
-        }
-        service.llm = mock_llm
 
-        transcript = "Alice: We reached the milestone. Bob: Great! This is a game changer."
-        summary = service.summarize(
-            transcript, meeting_title="Project Update", attendees=["Alice", "Bob"]
-        )
+        with patch("mlx_vlm.generate", return_value=mock_result):
+            transcript = "Alice: We reached the milestone. Bob: Great! This is a game changer."
+            summary = service.summarize(
+                transcript, meeting_title="Project Update", attendees=["Alice", "Bob"]
+            )
 
-        # verify thinking tags removed
-        assert "<think" not in summary
-        assert "Let me analyze" not in summary
+            # verify thinking tags removed
+            assert "<think" not in summary
+            assert "Let me analyze" not in summary
 
-        # verify content preserved
-        assert "## summary" in summary
-        assert "project updates and timeline" in summary
-        assert "Project milestone reached" in summary
-        assert "Proceed with phase 2" in summary
-        assert "Alice — Prepare report" in summary
-        assert "This is a game changer" in summary
+            # verify content preserved
+            assert "## summary" in summary
+            assert "project updates and timeline" in summary
+            assert "Project milestone reached" in summary
+            assert "Proceed with phase 2" in summary
+            assert "Alice — Prepare report" in summary
+            assert "This is a game changer" in summary
 
-        # save summary
-        base_path = temp_dir / "meeting"
-        save_summary(summary, base_path)
+            # save summary
+            base_path = temp_dir / "meeting"
+            save_summary(summary, base_path)
 
-        # verify saved file
-        saved_file = base_path.with_suffix(".summary.md")
-        assert saved_file.exists()
+            # verify saved file
+            saved_file = base_path.with_suffix(".summary.md")
+            assert saved_file.exists()
 
-        saved_content = saved_file.read_text()
-        assert "# Meeting Summary" in saved_content
-        assert "Project milestone reached" in saved_content
+            saved_content = saved_file.read_text()
+            assert "# Meeting Summary" in saved_content
+            assert "Project milestone reached" in saved_content
 
 
 class TestExtractMeetingTitle:
@@ -604,7 +684,6 @@ class MockSummarizationService:
             user_prompt_parts.append(f"manual notes:\n{manual_notes_text}")
 
         user_prompt_parts.append(f"transcript:\n{transcript_text}")
-        # user_prompt = "\n\n".join(user_prompt_parts)  # Not used in mock
 
         # Mock LLM response that includes manual notes content
         base_summary = '## summary\n\nThis meeting was about project timeline.\n\n## key discussion points\n\n- Project planning\n- Timeline review\n\n## decisions\n\nApproved project timeline\n\n## action items\n\n- [ ] Team — Finalize project plan (due: TBD)\n\n## notable quotes\n\n"Let\'s move forward with the plan"'
