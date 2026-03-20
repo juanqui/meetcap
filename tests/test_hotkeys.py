@@ -388,6 +388,66 @@ class TestHotkeyIntegration:
             wrapper(some_arg=True, another=False)
         assert callback_called
 
+    def test_state_lock_exists(self):
+        """test that hotkey manager has thread-safe state lock"""
+        manager = HotkeyManager(Mock())
+        assert hasattr(manager, "_state_lock")
+        assert isinstance(manager._state_lock, type(threading.Lock()))
+
+    def test_state_lock_used_in_prefix_key(self):
+        """test that _state_lock is acquired during prefix key activation"""
+        timer_callback = Mock()
+        manager = HotkeyManager(Mock(), timer_callback=timer_callback, prefix_key="<ctrl>+a")
+
+        with patch.object(manager, "_setup_single_key_listener"):
+            # call prefix key handler
+            manager._on_prefix_key()
+
+        # verify prefix was activated (proves lock was acquired and released)
+        assert manager._prefix_active is True
+        assert manager._waiting_for_action is True
+
+    def test_state_lock_used_in_deactivate_prefix(self):
+        """test that _state_lock is acquired during prefix deactivation"""
+        manager = HotkeyManager(Mock(), timer_callback=Mock())
+        manager._prefix_active = True
+        manager._waiting_for_action = True
+
+        manager._deactivate_prefix()
+
+        assert manager._prefix_active is False
+        assert manager._waiting_for_action is False
+
+    def test_deactivate_prefix_already_inactive(self):
+        """test that deactivating an already inactive prefix is a no-op"""
+        manager = HotkeyManager(Mock(), timer_callback=Mock())
+        manager._prefix_active = False
+
+        # should return early without error
+        manager._deactivate_prefix()
+        assert manager._prefix_active is False
+
+    def test_on_prefix_key_no_timer_callback(self):
+        """test that prefix key does nothing when no timer callback"""
+        manager = HotkeyManager(Mock(), timer_callback=None)
+
+        # should return early without error
+        manager._on_prefix_key()
+        assert manager._prefix_active is False
+
+    def test_prefix_timer_cancelled_on_reactivation(self):
+        """test that existing prefix timer is cancelled on new prefix activation"""
+        timer_callback = Mock()
+        manager = HotkeyManager(Mock(), timer_callback=timer_callback)
+
+        mock_timer = Mock()
+        manager._prefix_timer = mock_timer
+
+        with patch.object(manager, "_setup_single_key_listener"):
+            manager._on_prefix_key()
+
+        mock_timer.cancel.assert_called_once()
+
     def test_monkey_patch_on_press_signature_compatibility(self):
         """test that the monkey-patched _on_press method handles signature changes"""
 

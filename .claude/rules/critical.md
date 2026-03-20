@@ -10,7 +10,7 @@ Never commit secrets, API keys, tokens, credentials, or `.env` files to source c
 
 Never commit or push unless explicitly asked. Do not infer that you should commit after implementing a feature. Wait for explicit instruction ("commit this", "push this", "cut a PR").
 
-Before pushing: always run `hatch run test` and `hatch run lint` to verify the build passes. Never push code that fails tests or linting.
+Before pushing: always run `uv run pytest` and `uv run ruff check . && uv run ruff format --check .` to verify the build passes. Never push code that fails tests or linting.
 
 ## Assumption Grounding
 
@@ -27,9 +27,9 @@ If you cannot verify something, explicitly flag it as an **unverified assumption
 
 Work is not done until verified:
 
-1. Lint: `hatch run lint` passes
-2. Tests: `hatch run test` passes
-3. Manual check when possible: `hatch run meetcap verify`
+1. Lint: `uv run ruff check . && uv run ruff format --check .` passes
+2. Tests: `uv run pytest` passes
+3. Manual check when possible: `uv run meetcap verify`
 
 ### Debugging Discipline
 
@@ -47,12 +47,12 @@ Never run builds, tests, or linters multiple times when once suffices.
 
 ```bash
 # correct — capture output, inspect separately
-hatch run test 2>&1 | tee /tmp/test-output.log
+uv run pytest 2>&1 | tee /tmp/test-output.log
 grep -iE "(error|warning|failed)" /tmp/test-output.log
 
 # wrong — runs the entire test suite twice
-hatch run test 2>&1 | tail -40
-hatch run test 2>&1 | grep -iE "error"
+uv run pytest 2>&1 | tail -40
+uv run pytest 2>&1 | grep -iE "error"
 ```
 
 ## Cost-Sensitive Configuration

@@ -49,7 +49,7 @@ Every pass must produce concrete improvements. No rubber-stamping.
 
 1. Break work into discrete tasks
 2. Follow the file changes table exactly
-3. Run `hatch run test` and `hatch run lint` after each significant change
+3. Run `uv run pytest` and `uv run ruff check .` after each significant change
 4. Self-review all changes against the spec
 
 ## Phase 5: Verification & Maintenance

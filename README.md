@@ -6,8 +6,9 @@ Offline meeting recorder & summarizer for macOS
 
 - Records both system audio and microphone simultaneously
 - 100% offline operation - no network connections
-- Local transcription using Whisper
+- Local transcription using Parakeet TDT (default, Apple Silicon) or Whisper
 - Local summarization using Qwen3.5-4B via MLX (Apple Silicon native)
+- Speaker diarization via sherpa-onnx (identifies who said what)
 - Simple CLI workflow: start recording → stop with hotkey → get transcript & summary
 
 ## Installation

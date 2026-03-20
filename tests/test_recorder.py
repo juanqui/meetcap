@@ -462,6 +462,69 @@ class TestAudioRecorder:
         assert output_file.exists()  # should not be deleted
 
 
+class TestAudioRecorderContextManager:
+    """test audio recorder context manager protocol"""
+
+    @pytest.fixture
+    def recorder(self, temp_dir):
+        """create a recorder instance with temp directory"""
+        return AudioRecorder(output_dir=temp_dir)
+
+    def test_context_manager_enter_returns_self(self, recorder):
+        """test that __enter__ returns the recorder instance"""
+        result = recorder.__enter__()
+        assert result is recorder
+
+    def test_context_manager_exit_calls_stop(self, recorder):
+        """test that __exit__ calls stop_recording"""
+        with patch.object(recorder, "stop_recording") as mock_stop:
+            result = recorder.__exit__(None, None, None)
+
+        mock_stop.assert_called_once()
+        assert result is False
+
+    def test_context_manager_exit_returns_false(self, recorder):
+        """test that __exit__ returns False (does not suppress exceptions)"""
+        with patch.object(recorder, "stop_recording"):
+            result = recorder.__exit__(ValueError, ValueError("test"), None)
+
+        assert result is False
+
+    def test_context_manager_with_statement(self, temp_dir):
+        """test using recorder as context manager in with statement"""
+        with AudioRecorder(output_dir=temp_dir) as recorder:
+            assert isinstance(recorder, AudioRecorder)
+
+        # after exiting, stop_recording should have been called
+        # (it's a no-op when no session is active)
+        assert recorder.session is None
+
+    def test_context_manager_exit_stops_active_session(self, temp_dir):
+        """test context manager exit stops an active recording session"""
+        recorder = AudioRecorder(output_dir=temp_dir)
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_process.stdin = Mock()
+        mock_process.wait.return_value = None
+
+        output_file = temp_dir / "test.wav"
+        output_file.write_bytes(b"x" * 100)
+
+        recorder.session = RecordingSession(
+            process=mock_process,
+            output_path=output_file,
+            start_time=time.time() - 5,
+            device_name="Test",
+            sample_rate=48000,
+            channels=2,
+        )
+
+        recorder.__exit__(None, None, None)
+
+        assert recorder.session is None
+        mock_process.stdin.write.assert_called_with(b"q")
+
+
 class TestRecorderIntegration:
     """integration tests for recorder functionality"""
 

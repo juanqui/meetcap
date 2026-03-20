@@ -54,6 +54,13 @@ class AudioRecorder:
         self.session: RecordingSession | None = None
         self._stop_event = threading.Event()
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.stop_recording()
+        return False
+
     def _get_file_extension(self, audio_format: AudioFormat) -> str:
         """Get file extension for audio format."""
         extension_map = {

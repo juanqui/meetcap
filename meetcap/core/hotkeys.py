@@ -38,6 +38,7 @@ class HotkeyManager:
         self._last_trigger = 0.0
         self._debounce_interval = 0.5  # seconds
         self._stop_event = threading.Event()
+        self._state_lock = threading.Lock()
 
         # Prefix key state tracking
         self._prefix_active = False
@@ -60,39 +61,43 @@ class HotkeyManager:
         if not self.timer_callback:
             return
 
-        self._prefix_active = True
-        self._waiting_for_action = True
-        # Silent operation - no console output to avoid disrupting progress display
+        with self._state_lock:
+            self._prefix_active = True
+            self._waiting_for_action = True
+            # Silent operation - no console output to avoid disrupting progress display
 
-        # Start timeout timer
-        if self._prefix_timer:
-            self._prefix_timer.cancel()
-        self._prefix_timer = threading.Timer(self._prefix_timeout, self._deactivate_prefix)
-        self._prefix_timer.start()
+            # Start timeout timer
+            if self._prefix_timer:
+                self._prefix_timer.cancel()
+            self._prefix_timer = threading.Timer(self._prefix_timeout, self._deactivate_prefix)
+            self._prefix_timer.start()
 
-        # Start listening for next single keypress
+        # Start listening for next single keypress (outside lock to avoid nesting)
         self._setup_single_key_listener()
 
     def _deactivate_prefix(self) -> None:
         """deactivate prefix mode."""
-        if self._prefix_active:
+        with self._state_lock:
+            if not self._prefix_active:
+                return
             self._prefix_active = False
             self._waiting_for_action = False
-            self._cleanup_single_key_listener()
-            # Silent timeout - no console output
+        self._cleanup_single_key_listener()
+        # Silent timeout - no console output
 
     def _on_action_key(self, key_char: str) -> None:
         """handle action key press after prefix."""
-        if not self._prefix_active or not self.timer_callback or not self._waiting_for_action:
-            return
+        with self._state_lock:
+            if not self._prefix_active or not self.timer_callback or not self._waiting_for_action:
+                return
 
-        # Deactivate prefix mode
-        self._prefix_active = False
-        self._waiting_for_action = False
+            # Deactivate prefix mode
+            self._prefix_active = False
+            self._waiting_for_action = False
+            if self._prefix_timer:
+                self._prefix_timer.cancel()
+                self._prefix_timer = None
         self._cleanup_single_key_listener()
-        if self._prefix_timer:
-            self._prefix_timer.cancel()
-            self._prefix_timer = None
 
         # Map action keys to timer operations
         action_map = {
@@ -194,8 +199,9 @@ class HotkeyManager:
         """set up a temporary single key listener for the next action key."""
 
         def on_single_key_press(key):
-            if not self._waiting_for_action:
-                return
+            with self._state_lock:
+                if not self._waiting_for_action:
+                    return
 
             try:
                 # Handle character keys
@@ -232,11 +238,12 @@ class HotkeyManager:
         self._cleanup_single_key_listener()
 
         # Cancel any active prefix timer
-        if self._prefix_timer:
-            self._prefix_timer.cancel()
-            self._prefix_timer = None
-        self._prefix_active = False
-        self._waiting_for_action = False
+        with self._state_lock:
+            if self._prefix_timer:
+                self._prefix_timer.cancel()
+                self._prefix_timer = None
+            self._prefix_active = False
+            self._waiting_for_action = False
 
     def _format_hotkey(self, combo: str) -> str:
         """

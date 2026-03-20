@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -57,7 +58,7 @@ class TranscriptionService:
 
     def is_loaded(self) -> bool:
         """check if model is currently loaded in memory."""
-        return getattr(self, "model", None) is not None
+        return getattr(self, "_is_loaded", False) or getattr(self, "model", None) is not None
 
     def get_memory_usage(self) -> dict:
         """return current memory usage statistics."""
@@ -115,85 +116,89 @@ class FasterWhisperService(TranscriptionService):
         self.compute_type = compute_type
         self.language = language
         self.model = None
+        self._load_lock = threading.Lock()
 
     def _load_model(self):
         """lazy load the model on first use."""
         if self.model is not None:
             return
+        with self._load_lock:
+            if self.model is not None:
+                return  # another thread loaded while we waited
 
-        try:
-            from faster_whisper import WhisperModel
-        except ImportError as e:
-            raise ImportError(
-                "faster-whisper not installed. install with: pip install faster-whisper"
-            ) from e
-
-        # determine compute type
-        compute_type = self.compute_type
-        if compute_type == "auto":
-            # use int8 for apple silicon (more compatible), float16 for others
-            import platform
-
-            if platform.processor() == "arm":
-                compute_type = "int8"  # more compatible than int8_float16
-            else:
-                compute_type = "float16"
-
-        # try loading model with fallback compute types
-        model_source = None
-        if self.model_path and self.model_path.exists():
-            model_source = str(self.model_path)
-            local_only = True
-            console.print(f"[cyan]loading whisper model from {self.model_path}...[/cyan]")
-        elif self.model_name and self.auto_download:
-            model_source = self.model_name
-            local_only = False
-            console.print(f"[cyan]loading whisper model '{self.model_name}'...[/cyan]")
-        else:
-            raise FileNotFoundError(
-                f"model not found and auto-download disabled. "
-                f"path: {self.model_path}, name: {self.model_name}"
-            )
-
-        # try compute types in order of preference
-        compute_types_to_try = (
-            [compute_type] if compute_type != "auto" else ["int8", "float16", "float32"]
-        )
-        last_error = None
-
-        for ct in compute_types_to_try:
             try:
-                if local_only:
-                    self.model = WhisperModel(
-                        model_source,
-                        device=self.device,
-                        compute_type=ct,
-                        local_files_only=True,
-                    )
+                from faster_whisper import WhisperModel
+            except ImportError as e:
+                raise ImportError(
+                    "faster-whisper not installed. install with: pip install faster-whisper"
+                ) from e
+
+            # determine compute type
+            compute_type = self.compute_type
+            if compute_type == "auto":
+                # use int8 for apple silicon (more compatible), float16 for others
+                import platform
+
+                if platform.processor() == "arm":
+                    compute_type = "int8"  # more compatible than int8_float16
                 else:
-                    self.model = WhisperModel(
-                        model_source,
-                        device=self.device,
-                        compute_type=ct,
-                        download_root=str(Path.home() / ".meetcap" / "models"),
-                        local_files_only=False,
-                    )
-                console.print(f"[green]✓[/green] loaded with compute type: {ct}")
-                break
-            except Exception as e:
-                last_error = e
-                if "compute type" in str(e).lower():
-                    console.print(
-                        f"[yellow]compute type {ct} not supported, trying next...[/yellow]"
-                    )
-                    continue
-                else:
-                    raise
-        else:
-            # all compute types failed
-            raise RuntimeError(
-                f"failed to load model with any compute type. last error: {last_error}"
+                    compute_type = "float16"
+
+            # try loading model with fallback compute types
+            model_source = None
+            if self.model_path and self.model_path.exists():
+                model_source = str(self.model_path)
+                local_only = True
+                console.print(f"[cyan]loading whisper model from {self.model_path}...[/cyan]")
+            elif self.model_name and self.auto_download:
+                model_source = self.model_name
+                local_only = False
+                console.print(f"[cyan]loading whisper model '{self.model_name}'...[/cyan]")
+            else:
+                raise FileNotFoundError(
+                    f"model not found and auto-download disabled. "
+                    f"path: {self.model_path}, name: {self.model_name}"
+                )
+
+            # try compute types in order of preference
+            compute_types_to_try = (
+                [compute_type] if compute_type != "auto" else ["int8", "float16", "float32"]
             )
+            last_error = None
+
+            for ct in compute_types_to_try:
+                try:
+                    if local_only:
+                        self.model = WhisperModel(
+                            model_source,
+                            device=self.device,
+                            compute_type=ct,
+                            local_files_only=True,
+                        )
+                    else:
+                        self.model = WhisperModel(
+                            model_source,
+                            device=self.device,
+                            compute_type=ct,
+                            download_root=str(Path.home() / ".meetcap" / "models"),
+                            local_files_only=False,
+                        )
+                    console.print(f"[green]✓[/green] loaded with compute type: {ct}")
+                    break
+                except Exception as e:
+                    last_error = e
+                    if "compute type" in str(e).lower():
+                        console.print(
+                            f"[yellow]compute type {ct} not supported, trying next...[/yellow]"
+                        )
+                        continue
+                    else:
+                        raise
+            else:
+                # all compute types failed
+                raise RuntimeError(
+                    f"failed to load model with any compute type. last error: {last_error}"
+                )
 
     def transcribe(self, audio_path: Path) -> TranscriptResult:
         """
@@ -274,26 +279,19 @@ class FasterWhisperService(TranscriptionService):
 
     def unload_model(self) -> None:
         """unload faster-whisper model and cleanup GPU/CPU resources."""
-        if self.model is not None:
-            # Release model reference
+        if hasattr(self, "model") and self.model is not None:
             del self.model
-            self.model = None
+        self.model = None
+        import gc
 
-            # Force garbage collection
-            import gc
+        gc.collect()
+        try:
+            import mlx.core as mx
 
-            gc.collect()
-
-            # Clear GPU cache if using CUDA
-            try:
-                import torch
-
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except ImportError:
-                pass
-
-            console.print("[dim]faster-whisper model unloaded[/dim]")
+            mx.metal.clear_cache()
+        except (ImportError, Exception):
+            pass
+        console.print("[dim]faster-whisper model unloaded[/dim]")
 
 
 class WhisperCppService(TranscriptionService):
@@ -476,7 +474,9 @@ class MlxWhisperService(TranscriptionService):
         self.auto_download = auto_download
         self.language = language
         self.model = None
+        self._is_loaded = False
         self.model_source = None
+        self._load_lock = threading.Lock()
 
         # if model_path provided, use it directly
         if model_path:
@@ -484,33 +484,36 @@ class MlxWhisperService(TranscriptionService):
 
     def _load_model(self):
         """lazy load the model on first use."""
-        if self.model is not None:
+        if self._is_loaded:
             return
+        with self._load_lock:
+            if self._is_loaded:
+                return  # another thread loaded while we waited
 
-        try:
-            import mlx_whisper  # noqa: F401
-        except ImportError as e:
-            raise ImportError(
-                "mlx-whisper not installed. install with: pip install mlx-whisper"
-            ) from e
+            try:
+                import mlx_whisper  # noqa: F401
+            except ImportError as e:
+                raise ImportError(
+                    "mlx-whisper not installed. install with: pip install mlx-whisper"
+                ) from e
 
-        # determine model source
-        if self.model_path and self.model_path.exists():
-            self.model_source = str(self.model_path)
-            console.print(f"[cyan]using mlx-whisper model from {self.model_path}...[/cyan]")
-        elif self.auto_download:
-            self.model_source = self.model_name
-            console.print(f"[cyan]using mlx-whisper model '{self.model_name}'...[/cyan]")
-        else:
-            raise FileNotFoundError(
-                f"mlx-whisper model not found and auto-download disabled. "
-                f"path: {self.model_path}, name: {self.model_name}"
-            )
+            # determine model source
+            if self.model_path and self.model_path.exists():
+                self.model_source = str(self.model_path)
+                console.print(f"[cyan]using mlx-whisper model from {self.model_path}...[/cyan]")
+            elif self.auto_download:
+                self.model_source = self.model_name
+                console.print(f"[cyan]using mlx-whisper model '{self.model_name}'...[/cyan]")
+            else:
+                raise FileNotFoundError(
+                    f"mlx-whisper model not found and auto-download disabled. "
+                    f"path: {self.model_path}, name: {self.model_name}"
+                )
 
-        # mlx-whisper doesn't have a separate model loading step
-        # model loading happens automatically during transcription
-        self.model = "loaded"  # just mark as ready
-        console.print("[green]✓[/green] mlx-whisper model ready")
+            # mlx-whisper doesn't have a separate model loading step
+            # model loading happens automatically during transcription
+            self._is_loaded = True
+            console.print("[green]✓[/green] mlx-whisper model ready")
 
     def transcribe(self, audio_path: Path) -> TranscriptResult:
         """
@@ -599,13 +602,17 @@ class MlxWhisperService(TranscriptionService):
         duration = time.time() - start_time
         audio_duration = segments_list[-1].end if segments_list else 0.0
 
-        console.print(
-            f"[green]✓[/green] mlx-whisper transcription complete: "
-            f"{len(segments_list)} segments in {duration:.1f}s "
-            f"(speed: {audio_duration / duration:.1f}x)"
-            if audio_duration > 0
-            else ""
-        )
+        if audio_duration > 0:
+            console.print(
+                f"[green]✓[/green] mlx-whisper transcription complete: "
+                f"{len(segments_list)} segments in {duration:.1f}s "
+                f"(speed: {audio_duration / duration:.1f}x)"
+            )
+        else:
+            console.print(
+                f"[green]✓[/green] mlx-whisper transcription complete: "
+                f"{len(segments_list)} segments in {duration:.1f}s"
+            )
 
         return TranscriptResult(
             audio_path=str(audio_path),
@@ -622,26 +629,21 @@ class MlxWhisperService(TranscriptionService):
 
     def unload_model(self) -> None:
         """unload MLX-whisper model and cleanup Metal resources."""
-        if self.model is not None:
-            # MLX models don't have explicit cleanup, but we can clear references
+        if hasattr(self, "model") and self.model is not None:
             del self.model
-            self.model = None
-            self.model_source = None
+        self.model = None
+        self._is_loaded = False
+        self.model_source = None
+        import gc
 
-            # Clear MLX memory if available
-            try:
-                import mlx.core as mx
+        gc.collect()
+        try:
+            import mlx.core as mx
 
-                mx.metal.clear_cache()
-            except (ImportError, AttributeError):
-                pass
-
-            # Force garbage collection
-            import gc
-
-            gc.collect()
-
-            console.print("[dim]mlx-whisper model unloaded[/dim]")
+            mx.metal.clear_cache()
+        except (ImportError, Exception):
+            pass
+        console.print("[dim]mlx-whisper model unloaded[/dim]")
 
 
 class VoskTranscriptionService(TranscriptionService):
@@ -669,46 +671,50 @@ class VoskTranscriptionService(TranscriptionService):
         self.enable_diarization = enable_diarization and spk_model_path is not None
         self.model = None
         self.spk_model = None
+        self._load_lock = threading.Lock()
 
     def _load_model(self):
         """lazy load the vosk model on first use."""
         if self.model is not None:
             return
+        with self._load_lock:
+            if self.model is not None:
+                return  # another thread loaded while we waited
 
-        try:
-            import vosk
-        except ImportError as e:
-            raise ImportError("vosk not installed. install with: pip install vosk") from e
+            try:
+                import vosk
+            except ImportError as e:
+                raise ImportError("vosk not installed. install with: pip install vosk") from e
 
-        if not self.model_path.exists():
-            raise FileNotFoundError(f"vosk model not found: {self.model_path}")
+            if not self.model_path.exists():
+                raise FileNotFoundError(f"vosk model not found: {self.model_path}")
 
-        console.print(f"[cyan]loading vosk model from {self.model_path.name}...[/cyan]")
+            console.print(f"[cyan]loading vosk model from {self.model_path.name}...[/cyan]")
 
-        try:
-            # set log level to warnings only
-            vosk.SetLogLevel(-1)
+            try:
+                # set log level to warnings only
+                vosk.SetLogLevel(-1)
 
-            # load main recognition model
-            self.model = vosk.Model(str(self.model_path))
-            console.print("[green]✓[/green] vosk model loaded")
+                # load main recognition model
+                self.model = vosk.Model(str(self.model_path))
+                console.print("[green]✓[/green] vosk model loaded")
 
-            # load speaker model if diarization enabled
-            if self.enable_diarization and self.spk_model_path:
-                if self.spk_model_path.exists():
-                    console.print(
-                        f"[cyan]loading speaker model from {self.spk_model_path.name}...[/cyan]"
-                    )
-                    self.spk_model = vosk.SpkModel(str(self.spk_model_path))
-                    console.print("[green]✓[/green] speaker model loaded")
-                else:
-                    console.print(
-                        "[yellow]warning: speaker model not found, diarization disabled[/yellow]"
-                    )
-                    self.enable_diarization = False
+                # load speaker model if diarization enabled
+                if self.enable_diarization and self.spk_model_path:
+                    if self.spk_model_path.exists():
+                        console.print(
+                            f"[cyan]loading speaker model from {self.spk_model_path.name}...[/cyan]"
+                        )
+                        self.spk_model = vosk.SpkModel(str(self.spk_model_path))
+                        console.print("[green]✓[/green] speaker model loaded")
+                    else:
+                        console.print(
+                            "[yellow]warning: speaker model not found, diarization disabled[/yellow]"
+                        )
+                        self.enable_diarization = False
 
-        except Exception as e:
-            raise RuntimeError(f"failed to load vosk model: {e}") from e
+            except Exception as e:
+                raise RuntimeError(f"failed to load vosk model: {e}") from e
 
     def transcribe(self, audio_path: Path) -> TranscriptResult:
         """
@@ -965,13 +971,17 @@ class VoskTranscriptionService(TranscriptionService):
         duration = time.time() - start_time
         audio_duration = segments_list[-1].end if segments_list else 0.0
 
-        console.print(
-            f"[green]✓[/green] vosk transcription complete: "
-            f"{len(segments_list)} segments in {duration:.1f}s "
-            f"(speed: {audio_duration / duration:.1f}x)"
-            if audio_duration > 0
-            else ""
-        )
+        if audio_duration > 0:
+            console.print(
+                f"[green]✓[/green] vosk transcription complete: "
+                f"{len(segments_list)} segments in {duration:.1f}s "
+                f"(speed: {audio_duration / duration:.1f}x)"
+            )
+        else:
+            console.print(
+                f"[green]✓[/green] vosk transcription complete: "
+                f"{len(segments_list)} segments in {duration:.1f}s"
+            )
 
         return TranscriptResult(
             audio_path=str(audio_path),
@@ -990,19 +1000,21 @@ class VoskTranscriptionService(TranscriptionService):
 
     def unload_model(self) -> None:
         """unload Vosk models and cleanup resources."""
-        if self.model is not None:
+        if hasattr(self, "model") and self.model is not None:
             del self.model
-            self.model = None
-
-        if self.spk_model is not None:
+        self.model = None
+        if hasattr(self, "spk_model") and self.spk_model is not None:
             del self.spk_model
-            self.spk_model = None
-
-        # Force garbage collection
+        self.spk_model = None
         import gc
 
         gc.collect()
+        try:
+            import mlx.core as mx
 
+            mx.metal.clear_cache()
+        except (ImportError, Exception):
+            pass
         console.print("[dim]vosk model unloaded[/dim]")
 
 

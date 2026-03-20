@@ -15,9 +15,9 @@ paths:
 ## Running Tests
 
 ```bash
-hatch run test                              # full suite with coverage
-hatch run pytest tests/test_cli.py -v       # specific file
-hatch run pytest tests/test_cli.py::test_record_command -v  # specific test
+uv run pytest                              # full suite with coverage
+uv run pytest tests/test_cli.py -v         # specific file
+uv run pytest tests/test_cli.py::test_record_command -v  # specific test
 ```
 
 ## Key Patterns

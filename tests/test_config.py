@@ -122,6 +122,21 @@ class TestConfig:
         # should keep default on invalid conversion
         assert config.get("audio", "sample_rate") == 48000
 
+    def test_env_override_invalid_int_logs_warning(self):
+        """test that invalid env var type coercion logs a warning"""
+        with patch.dict(os.environ, {"MEETCAP_SAMPLE_RATE": "notanumber"}):
+            with patch("pathlib.Path.exists", return_value=False):
+                with patch("meetcap.utils.config.logger") as mock_logger:
+                    config = Config()
+
+        mock_logger.warning.assert_called_once()
+        warning_msg = mock_logger.warning.call_args[0][0]
+        assert "MEETCAP_SAMPLE_RATE" in warning_msg
+        assert "notanumber" in warning_msg
+
+        # should still have default value
+        assert config.get("audio", "sample_rate") == 48000
+
     def test_deep_merge(self):
         """test deep merge functionality"""
         config = Config()

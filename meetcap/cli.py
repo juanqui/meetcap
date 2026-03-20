@@ -204,6 +204,18 @@ class RecordingOrchestrator:
         self.timer_lock = threading.Lock()
         self.timer_operations_queue = queue.Queue()
 
+    def _cleanup_service(self, service: object, service_name: str) -> None:
+        """unload model and run cleanup for a service."""
+        if hasattr(service, "unload_model"):
+            try:
+                service.unload_model()
+            except Exception:
+                pass
+        if self.config.get("memory", "aggressive_gc", True):
+            import gc
+
+            gc.collect()
+
     def run(
         self,
         device: str | None = None,
@@ -750,24 +762,14 @@ class RecordingOrchestrator:
             text_path, json_path = save_transcript(transcript_result, base_path)
 
             # explicitly unload model after transcription
-            if hasattr(stt_service, "unload_model"):
-                stt_service.unload_model()
-
-                # force garbage collection if configured
-                if self.config.get("memory", "aggressive_gc", True):
-                    import gc
-
-                    gc.collect()
+            self._cleanup_service(stt_service, "stt")
 
             return text_path, json_path
         except Exception as e:
+            logger.error(f"transcription failed: {e}", exc_info=True)
             console.print(f"[red]transcription failed: {e}[/red]")
             # ensure cleanup on error
-            if hasattr(stt_service, "unload_model"):
-                try:
-                    stt_service.unload_model()
-                except Exception:
-                    pass
+            self._cleanup_service(stt_service, "stt")
             return None
 
     def _process_transcript_to_summary(
@@ -846,24 +848,14 @@ class RecordingOrchestrator:
             summary_path = save_summary(summary, base_path, transcript_text=transcript_text)
 
             # explicitly unload model after summarization
-            if hasattr(llm_service, "unload_model"):
-                llm_service.unload_model()
-
-                # force garbage collection if configured
-                if self.config.get("memory", "aggressive_gc", True):
-                    import gc
-
-                    gc.collect()
+            self._cleanup_service(llm_service, "llm")
 
             return summary_path
         except Exception as e:
+            logger.error(f"summarization failed: {e}", exc_info=True)
             console.print(f"[red]summarization failed: {e}[/red]")
             # ensure cleanup on error
-            if hasattr(llm_service, "unload_model"):
-                try:
-                    llm_service.unload_model()
-                except Exception:
-                    pass
+            self._cleanup_service(llm_service, "llm")
             return None
 
     def _find_recording_file(self, recording_dir: Path) -> Path | None:

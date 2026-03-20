@@ -215,34 +215,44 @@ def ensure_mlx_whisper_model(
             import wave
 
             # create a 1-second test audio file
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                sample_rate = 16000
-                duration = 1.0
-                frames = int(sample_rate * duration)
+            tmp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                    tmp_path = tmp.name
+                    sample_rate = 16000
+                    duration = 1.0
+                    frames = int(sample_rate * duration)
 
-                # generate simple sine wave without numpy
-                audio_data = []
-                for i in range(frames):
-                    t = i / sample_rate
-                    sample = math.sin(440 * 2 * math.pi * t) * 0.1
-                    audio_int16 = int(sample * 32767)
-                    # clamp to int16 range
-                    audio_int16 = max(-32768, min(32767, audio_int16))
-                    audio_data.append(audio_int16)
+                    # generate simple sine wave without numpy
+                    audio_data = []
+                    for i in range(frames):
+                        t = i / sample_rate
+                        sample = math.sin(440 * 2 * math.pi * t) * 0.1
+                        audio_int16 = int(sample * 32767)
+                        # clamp to int16 range
+                        audio_int16 = max(-32768, min(32767, audio_int16))
+                        audio_data.append(audio_int16)
 
-                # write wav file
-                with wave.open(tmp.name, "w") as wav_file:
-                    wav_file.setnchannels(1)
-                    wav_file.setsampwidth(2)
-                    wav_file.setframerate(sample_rate)
-                    # convert to bytes
-                    import struct
+                    # write wav file
+                    with wave.open(tmp.name, "w") as wav_file:
+                        wav_file.setnchannels(1)
+                        wav_file.setsampwidth(2)
+                        wav_file.setframerate(sample_rate)
+                        # convert to bytes
+                        import struct
 
-                    audio_bytes = struct.pack("<" + "h" * len(audio_data), *audio_data)
-                    wav_file.writeframes(audio_bytes)
+                        audio_bytes = struct.pack("<" + "h" * len(audio_data), *audio_data)
+                        wav_file.writeframes(audio_bytes)
 
-                # trigger model download by transcribing test audio
-                mlx_whisper.transcribe(tmp.name, path_or_hf_repo=model_name)
+                    # trigger model download by transcribing test audio
+                    mlx_whisper.transcribe(tmp.name, path_or_hf_repo=model_name)
+            finally:
+                # clean up temp file
+                if tmp_path:
+                    try:
+                        Path(tmp_path).unlink()
+                    except OSError:
+                        pass
 
             progress.update(task, completed=True)
 
@@ -299,34 +309,44 @@ def verify_mlx_whisper_model(
         import wave
 
         # create a minimal test audio file
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            sample_rate = 16000
-            duration = 0.1  # very short for verification
-            frames = int(sample_rate * duration)
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                tmp_path = tmp.name
+                sample_rate = 16000
+                duration = 0.1  # very short for verification
+                frames = int(sample_rate * duration)
 
-            # generate simple sine wave without numpy
-            audio_data = []
-            for i in range(frames):
-                t = i / sample_rate
-                sample = math.sin(440 * 2 * math.pi * t) * 0.1
-                audio_int16 = int(sample * 32767)
-                # clamp to int16 range
-                audio_int16 = max(-32768, min(32767, audio_int16))
-                audio_data.append(audio_int16)
+                # generate simple sine wave without numpy
+                audio_data = []
+                for i in range(frames):
+                    t = i / sample_rate
+                    sample = math.sin(440 * 2 * math.pi * t) * 0.1
+                    audio_int16 = int(sample * 32767)
+                    # clamp to int16 range
+                    audio_int16 = max(-32768, min(32767, audio_int16))
+                    audio_data.append(audio_int16)
 
-            # write wav file
-            with wave.open(tmp.name, "w") as wav_file:
-                wav_file.setnchannels(1)
-                wav_file.setsampwidth(2)
-                wav_file.setframerate(sample_rate)
-                # convert to bytes
-                import struct
+                # write wav file
+                with wave.open(tmp.name, "w") as wav_file:
+                    wav_file.setnchannels(1)
+                    wav_file.setsampwidth(2)
+                    wav_file.setframerate(sample_rate)
+                    # convert to bytes
+                    import struct
 
-                audio_bytes = struct.pack("<" + "h" * len(audio_data), *audio_data)
-                wav_file.writeframes(audio_bytes)
+                    audio_bytes = struct.pack("<" + "h" * len(audio_data), *audio_data)
+                    wav_file.writeframes(audio_bytes)
 
-            # try to transcribe with the model
-            mlx_whisper.transcribe(tmp.name, path_or_hf_repo=model_name)
+                # try to transcribe with the model
+                mlx_whisper.transcribe(tmp.name, path_or_hf_repo=model_name)
+        finally:
+            # clean up temp file
+            if tmp_path:
+                try:
+                    Path(tmp_path).unlink()
+                except OSError:
+                    pass
 
         console.print(f"[green]✓[/green] mlx-whisper model '{model_name}' is ready")
         return True

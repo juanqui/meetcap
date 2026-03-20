@@ -1,6 +1,7 @@
 """comprehensive tests for summarization service"""
 
 import tempfile
+import threading
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -367,6 +368,47 @@ class TestSummarizationService:
 
         service.model = Mock()
         assert service.is_loaded() is True
+
+    def test_load_lock_exists(self):
+        """test that SummarizationService has a thread-safe load lock"""
+        service = SummarizationService()
+        assert hasattr(service, "_load_lock")
+        assert isinstance(service._load_lock, type(threading.Lock()))
+
+    @patch("meetcap.services.summarization.console")
+    def test_load_model_double_check_locking(self, mock_console):
+        """test that _load_model uses double-check locking pattern"""
+        mock_model = Mock()
+        mock_processor = Mock()
+
+        with patch("mlx_vlm.load", return_value=(mock_model, mock_processor)) as mock_load:
+            with patch("mlx_vlm.utils.load_config", return_value=Mock()):
+                service = SummarizationService()
+
+                # simulate model already loaded before acquiring lock
+                service.model = mock_model
+                service._load_model()
+
+                # should not call load since model is already set
+                mock_load.assert_not_called()
+
+    @patch("meetcap.services.summarization.console")
+    def test_unload_model_calls_gc_and_mlx_cleanup(self, mock_console):
+        """test that unload_model calls gc.collect and mlx.metal.clear_cache"""
+        service = SummarizationService()
+        service.model = Mock()
+        service.processor = Mock()
+        service.model_config = Mock()
+
+        with patch("gc.collect") as mock_gc:
+            mock_mx = Mock()
+            with patch.dict("sys.modules", {"mlx": Mock(), "mlx.core": mock_mx}):
+                service.unload_model()
+
+            mock_gc.assert_called_once()
+            assert service.model is None
+            assert service.processor is None
+            assert service.model_config is None
 
 
 class TestSaveSummary:

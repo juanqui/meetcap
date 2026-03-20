@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import threading
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -262,6 +263,35 @@ class TestFasterWhisperService:
         assert result.segments[1].id == 1
         assert result.segments[2].id == 2
         assert result.duration == 6.0  # last segment end time
+
+    def test_load_lock_exists(self):
+        """test that FasterWhisperService has a thread-safe load lock"""
+        service = FasterWhisperService(model_name="test")
+        assert hasattr(service, "_load_lock")
+        assert isinstance(service._load_lock, type(threading.Lock()))
+
+    def test_is_loaded_false_when_no_model(self):
+        """test is_loaded returns false when model is not loaded"""
+        service = FasterWhisperService(model_name="test")
+        assert not service.is_loaded()
+
+    def test_is_loaded_true_when_model_set(self):
+        """test is_loaded returns true when model is assigned"""
+        service = FasterWhisperService(model_name="test")
+        service.model = Mock()
+        assert service.is_loaded()
+
+    def test_unload_model_cleans_up(self):
+        """test unload_model sets model to None and calls gc"""
+        service = FasterWhisperService(model_name="test")
+        service.model = Mock()
+
+        with patch("gc.collect") as mock_gc:
+            service.unload_model()
+
+        assert service.model is None
+        mock_gc.assert_called_once()
+        assert not service.is_loaded()
 
     def test_transcribe_with_language_override(self, audio_file):
         """test transcription with language override"""
@@ -533,7 +563,7 @@ class TestMlxWhisperService:
             service._load_model()
 
         # mlx-whisper doesn't have load_models, just check model is marked ready
-        assert service.model == "loaded"
+        assert service.is_loaded()
 
     def test_transcribe_with_segments(self, audio_file, mock_console):
         """test transcription with segment output"""
@@ -593,6 +623,59 @@ class TestMlxWhisperService:
             service.transcribe(nonexistent_file)
 
         assert "audio file not found" in str(exc.value)
+
+    def test_load_lock_exists(self):
+        """test that MlxWhisperService has a thread-safe load lock"""
+        service = MlxWhisperService()
+        assert hasattr(service, "_load_lock")
+        assert isinstance(service._load_lock, type(threading.Lock()))
+
+    def test_is_loaded_flag_initial(self):
+        """test that _is_loaded is False initially"""
+        service = MlxWhisperService()
+        assert service._is_loaded is False
+        assert not service.is_loaded()
+
+    def test_is_loaded_after_loading(self, mock_console):
+        """test that _is_loaded is True after model loading"""
+        service = MlxWhisperService(
+            model_name="mlx-community/whisper-large-v3-turbo", auto_download=True
+        )
+
+        mock_mlx_whisper = Mock()
+        with patch.dict("sys.modules", {"mlx_whisper": mock_mlx_whisper}):
+            service._load_model()
+
+        assert service._is_loaded is True
+        assert service.is_loaded()
+
+    def test_unload_model_resets_is_loaded(self, mock_console):
+        """test that unload_model resets _is_loaded flag"""
+        service = MlxWhisperService()
+        service._is_loaded = True
+        service.model = Mock()
+        service.model_source = "test"
+
+        with patch("gc.collect"):
+            service.unload_model()
+
+        assert service._is_loaded is False
+        assert service.model is None
+        assert service.model_source is None
+        assert not service.is_loaded()
+
+    def test_load_model_not_found_no_auto_download(self, mock_console):
+        """test FileNotFoundError when model not found and auto-download disabled"""
+        service = MlxWhisperService(
+            model_name="test-model",
+            model_path="/nonexistent/path",
+            auto_download=False,
+        )
+
+        mock_mlx_whisper = Mock()
+        with patch.dict("sys.modules", {"mlx_whisper": mock_mlx_whisper}):
+            with pytest.raises(FileNotFoundError, match="mlx-whisper model not found"):
+                service._load_model()
 
     def test_transcribe_with_fallback(self, audio_file, mock_console):
         """test fallback to faster-whisper on mlx-whisper failure"""

@@ -247,6 +247,66 @@ class TestRecordingOrchestrator:
                         mock_save_summary.assert_called_once()
 
 
+class TestCleanupService:
+    """test _cleanup_service helper method"""
+
+    @pytest.fixture
+    def config(self, temp_dir, mock_config_data):
+        """create test config"""
+        config = Config(config_path=temp_dir / "config.toml")
+        config.config = mock_config_data
+        return config
+
+    @pytest.fixture
+    def orchestrator(self, config):
+        """create orchestrator instance"""
+        return RecordingOrchestrator(config)
+
+    def test_cleanup_service_calls_unload_model(self, orchestrator):
+        """test that _cleanup_service calls unload_model on the service"""
+        mock_service = Mock()
+        mock_service.unload_model = Mock()
+
+        orchestrator._cleanup_service(mock_service, "test_service")
+
+        mock_service.unload_model.assert_called_once()
+
+    def test_cleanup_service_handles_exception(self, orchestrator):
+        """test that _cleanup_service swallows exceptions from unload_model"""
+        mock_service = Mock()
+        mock_service.unload_model.side_effect = RuntimeError("cleanup failed")
+
+        # should not raise
+        orchestrator._cleanup_service(mock_service, "test_service")
+
+    def test_cleanup_service_without_unload_method(self, orchestrator):
+        """test _cleanup_service with a service that has no unload_model"""
+        mock_service = object()  # plain object has no unload_model
+
+        # should not raise
+        orchestrator._cleanup_service(mock_service, "test_service")
+
+    def test_cleanup_service_runs_gc_when_aggressive(self, orchestrator):
+        """test that _cleanup_service runs gc.collect when aggressive_gc is enabled"""
+        orchestrator.config.config.setdefault("memory", {})["aggressive_gc"] = True
+        mock_service = Mock()
+
+        with patch("gc.collect") as mock_gc:
+            orchestrator._cleanup_service(mock_service, "test_service")
+
+        mock_gc.assert_called_once()
+
+    def test_cleanup_service_skips_gc_when_not_aggressive(self, orchestrator):
+        """test that _cleanup_service skips gc.collect when aggressive_gc is disabled"""
+        orchestrator.config.config.setdefault("memory", {})["aggressive_gc"] = False
+        mock_service = Mock()
+
+        with patch("gc.collect") as mock_gc:
+            orchestrator._cleanup_service(mock_service, "test_service")
+
+        mock_gc.assert_not_called()
+
+
 class TestCLICommands:
     """test CLI commands"""
 

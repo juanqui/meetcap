@@ -13,6 +13,8 @@ else:
 
 from rich.console import Console
 
+from meetcap.utils.logger import logger
+
 console = Console()
 
 
@@ -177,6 +179,7 @@ class Config:
                     try:
                         value = type_func(value)
                     except ValueError:
+                        logger.warning(f"ignoring invalid env var {env_var}={value}")
                         continue
                 else:
                     section, key = path_spec
@@ -203,7 +206,9 @@ class Config:
         if "llm_gguf_path" in models:
             console.print("[dim]migrating from GGUF to MLX llm model...[/dim]")
             del self.config["models"]["llm_gguf_path"]
-            self.config["models"]["llm_model_name"] = "mlx-community/Qwen3.5-4B-MLX-4bit"
+            self.config.setdefault("models", {}).setdefault(
+                "llm_model_name", "mlx-community/Qwen3.5-4B-MLX-4bit"
+            )
             needs_migration = True
 
         # check for llm_model_name ending in .gguf
@@ -228,17 +233,11 @@ class Config:
                     "[dim]migrating audio format from wav to opus (98% space savings)...[/dim]"
                 )
 
-            # Ensure audio section exists
-            if "audio" not in self.config:
-                self.config["audio"] = {}
+            self.config.setdefault("audio", {}).setdefault("format", "opus")
 
-            self.config["audio"]["format"] = "opus"
-
-            # Also set the opus_bitrate and flac_compression_level defaults if not present
-            if "opus_bitrate" not in self.config["audio"]:
-                self.config["audio"]["opus_bitrate"] = 32
-            if "flac_compression_level" not in self.config["audio"]:
-                self.config["audio"]["flac_compression_level"] = 5
+            # also set the opus_bitrate and flac_compression_level defaults if not present
+            self.config.setdefault("audio", {}).setdefault("opus_bitrate", 32)
+            self.config.setdefault("audio", {}).setdefault("flac_compression_level", 5)
 
             # save the migration immediately
             self.save()

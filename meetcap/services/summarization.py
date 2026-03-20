@@ -1,6 +1,7 @@
 """llm-based meeting summarization using qwen3.5 via mlx-vlm"""
 
 import re
+import threading
 import time
 from pathlib import Path
 
@@ -43,24 +44,28 @@ class SummarizationService:
         self.model = None
         self.processor = None
         self.model_config = None
+        self._load_lock = threading.Lock()
 
     def _load_model(self) -> None:
         """lazy load the llm model."""
         if self.model is not None:
             return
+        with self._load_lock:
+            if self.model is not None:
+                return  # another thread loaded while we waited
 
-        try:
-            from mlx_vlm import load
-            from mlx_vlm.utils import load_config
-        except ImportError as e:
-            raise ImportError(
-                "mlx-vlm not installed. install with: pip install 'mlx-vlm[torch]>=0.4.0'"
-            ) from e
+            try:
+                from mlx_vlm import load
+                from mlx_vlm.utils import load_config
+            except ImportError as e:
+                raise ImportError(
+                    "mlx-vlm not installed. install with: pip install 'mlx-vlm[torch]>=0.4.0'"
+                ) from e
 
-        console.print(f"[cyan]loading llm model {self.model_name}...[/cyan]")
+            console.print(f"[cyan]loading llm model {self.model_name}...[/cyan]")
 
-        self.model_config = load_config(self.model_name)
-        self.model, self.processor = load(self.model_name)
+            self.model_config = load_config(self.model_name)
+            self.model, self.processor = load(self.model_name)
 
     def load_model(self) -> None:
         """explicitly load the llm model."""
@@ -68,27 +73,23 @@ class SummarizationService:
 
     def unload_model(self) -> None:
         """unload mlx-vlm model and cleanup resources."""
-        if self.model is not None:
+        if hasattr(self, "model") and self.model is not None:
             del self.model
+        self.model = None
+        if hasattr(self, "processor") and self.processor is not None:
             del self.processor
-            self.model = None
-            self.processor = None
-            self.model_config = None
+        self.processor = None
+        self.model_config = None
+        import gc
 
-            # clear mlx cache
-            try:
-                import mlx.core as mx
+        gc.collect()
+        try:
+            import mlx.core as mx
 
-                mx.clear_cache()
-            except (ImportError, AttributeError):
-                pass
-
-            # force garbage collection
-            import gc
-
-            gc.collect()
-
-            console.print("[dim]llm model unloaded[/dim]")
+            mx.metal.clear_cache()
+        except (ImportError, Exception):
+            pass
+        console.print("[dim]llm model unloaded[/dim]")
 
     def is_loaded(self) -> bool:
         """check if model is currently loaded."""

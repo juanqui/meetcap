@@ -1,14 +1,14 @@
 # Development Workflow
 
-## Hatch Requirement
+## uv Requirement
 
-This project uses Hatch for dependency management. **All Python commands must be prefixed with `hatch run`** to ensure the correct virtual environment is activated. Without it, you'll get `ModuleNotFoundError: No module named 'meetcap'`.
+This project uses uv for dependency management. **All Python commands must be prefixed with `uv run`** to ensure the correct virtual environment is activated. Without it, you'll get `ModuleNotFoundError: No module named 'meetcap'`.
 
 ```bash
 # correct
-hatch run python script.py
-hatch run python -c "import meetcap; print(meetcap.__version__)"
-hatch run pytest tests/test_cli.py -v
+uv run python script.py
+uv run python -c "import meetcap; print(meetcap.__version__)"
+uv run pytest tests/test_cli.py -v
 
 # wrong — will fail
 python script.py
@@ -51,7 +51,7 @@ MEETCAP_SHERPA_THRESHOLD    # clustering threshold (0.0-1.0)
 Uses `bump2version` for versioning. Version defined in `meetcap/__init__.py`.
 
 ```bash
-hatch run bump2version patch   # 1.3.1 → 1.3.2
-hatch run bump2version minor   # 1.3.1 → 1.4.0
-hatch run bump2version major   # 1.3.1 → 2.0.0
+uv run bump2version patch   # 1.3.1 → 1.3.2
+uv run bump2version minor   # 1.3.1 → 1.4.0
+uv run bump2version major   # 1.3.1 → 2.0.0
 ```

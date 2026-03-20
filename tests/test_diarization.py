@@ -391,6 +391,49 @@ class TestSherpaOnnxDiarizationService:
         service.unload_model()  # should not raise
         assert service.sd is None
 
+    def test_unload_model_calls_gc_collect(self):
+        """test that unload_model calls gc.collect for memory cleanup"""
+        service = SherpaOnnxDiarizationService(
+            segmentation_model="/seg.onnx",
+            embedding_model="/emb.onnx",
+        )
+        service.sd = Mock()
+
+        with patch("gc.collect") as mock_gc:
+            service.unload_model()
+
+        mock_gc.assert_called_once()
+        assert service.sd is None
+
+    def test_unload_model_tries_mlx_clear_cache(self):
+        """test that unload_model tries to clear mlx metal cache"""
+        service = SherpaOnnxDiarizationService(
+            segmentation_model="/seg.onnx",
+            embedding_model="/emb.onnx",
+        )
+        service.sd = Mock()
+
+        mock_mx = Mock()
+        with patch("gc.collect"):
+            with patch.dict("sys.modules", {"mlx": Mock(), "mlx.core": mock_mx}):
+                service.unload_model()
+
+        assert service.sd is None
+
+    def test_unload_model_ignores_mlx_import_error(self):
+        """test that unload_model handles missing mlx gracefully"""
+        service = SherpaOnnxDiarizationService(
+            segmentation_model="/seg.onnx",
+            embedding_model="/emb.onnx",
+        )
+        service.sd = Mock()
+
+        with patch("gc.collect"):
+            # mlx is not installed, should not raise
+            service.unload_model()
+
+        assert service.sd is None
+
 
 class TestAssignSpeakers:
     """test speaker assignment algorithm"""

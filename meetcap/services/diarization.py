@@ -179,15 +179,19 @@ class SherpaOnnxDiarizationService(DiarizationService):
 
     def unload_model(self) -> None:
         """unload diarization models."""
-        if self.sd is not None:
+        if hasattr(self, "sd") and self.sd is not None:
             del self.sd
-            self.sd = None
+        self.sd = None
+        import gc
 
-            import gc
+        gc.collect()
+        try:
+            import mlx.core as mx
 
-            gc.collect()
-
-            console.print("[dim]diarization models unloaded[/dim]")
+            mx.metal.clear_cache()
+        except (ImportError, Exception):
+            pass
+        console.print("[dim]diarization models unloaded[/dim]")
 
 
 def assign_speakers(

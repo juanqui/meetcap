@@ -4,18 +4,19 @@ Offline meeting recorder & summarizer for macOS. Captures system audio + microph
 
 ## Essential Commands
 
-All Python commands **must** use `hatch run` prefix.
+All Python commands **must** use `uv run` prefix.
 
 ```bash
-hatch run test                # run tests with coverage
-hatch run fmt                 # format code (black + ruff)
-hatch run lint                # lint code
-hatch run meetcap record      # start recording
-hatch run meetcap summarize   # process existing audio
-hatch run meetcap reprocess   # reprocess with different models
-hatch run meetcap devices     # list audio devices
-hatch run meetcap verify      # verify system setup
-hatch run meetcap setup       # interactive setup wizard
+uv run pytest                 # run tests with coverage
+uv run ruff format .          # format code
+uv run ruff check --fix .     # lint and fix
+uv run ruff check .           # lint code
+uv run meetcap record         # start recording
+uv run meetcap summarize      # process existing audio
+uv run meetcap reprocess      # reprocess with different models
+uv run meetcap devices        # list audio devices
+uv run meetcap verify         # verify system setup
+uv run meetcap setup          # interactive setup wizard
 ```
 
 ## Commit Style
