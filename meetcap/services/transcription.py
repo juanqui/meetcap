@@ -389,15 +389,16 @@ class WhisperCppService(TranscriptionService):
 
     def unload_model(self) -> None:
         """unload WhisperCpp service resources."""
-        # WhisperCpp is CLI-based, no models to unload
-        # Just ensure paths are cleared
-        self.whisper_cpp_path = None
-        self.model_path = None
-
-        # Force garbage collection for any cached data
+        # WhisperCpp is CLI-based, no in-memory models to unload
         import gc
 
         gc.collect()
+        try:
+            import mlx.core as mx
+
+            mx.metal.clear_cache()
+        except (ImportError, Exception):
+            pass
 
         console.print("[dim]whisper.cpp resources cleared[/dim]")
 
