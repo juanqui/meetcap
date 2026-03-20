@@ -117,9 +117,15 @@ class TestCheckStt:
         result = ReadinessResult()
         mock_config = MagicMock()
         mock_config.expand_path.return_value = Path("/tmp/models")
-        mock_config.get.return_value = "~/.meetcap/models"
+        mock_config.get.return_value = "mlx-community/parakeet-tdt-0.6b-v3"
 
-        with patch("meetcap.tui.readiness._is_package_installed", return_value=True):
+        with (
+            patch("meetcap.tui.readiness._is_package_installed", return_value=True),
+            patch(
+                "huggingface_hub.try_to_load_from_cache",
+                return_value=str(Path("/tmp")),
+            ),
+        ):
             _check_stt(result, mock_config, "parakeet")
 
         stt_issues = [i for i in result.issues if i.component == "stt"]

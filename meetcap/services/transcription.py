@@ -676,6 +676,22 @@ class ParakeetService(TranscriptionService):
                 ) from e
 
             console.print(f"[cyan]loading parakeet model '{self.model_name}'...[/cyan]")
+
+            # pre-download model files with explicit error handling
+            # (parakeet_mlx's from_pretrained has a catch-all except that
+            # masks download errors and falls through to local path lookup)
+            try:
+                from huggingface_hub import hf_hub_download
+
+                console.print("[dim]checking model cache...[/dim]")
+                hf_hub_download(self.model_name, "config.json")
+                hf_hub_download(self.model_name, "model.safetensors")
+            except Exception as e:
+                raise RuntimeError(
+                    f"failed to download parakeet model '{self.model_name}': {e}. "
+                    f"check your internet connection and try again, or run 'meetcap setup'."
+                ) from e
+
             self.model = from_pretrained(self.model_name)
             self._is_loaded = True
             console.print("[green]✓[/green] parakeet model ready")

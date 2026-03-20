@@ -1750,7 +1750,13 @@ def devices() -> None:
 
 
 @app.command()
-def setup() -> None:
+def setup(
+    force_download: bool = typer.Option(
+        False,
+        "--force-download",
+        help="force re-download all models even if they exist",
+    ),
+) -> None:
     """interactive setup wizard for first-time configuration"""
     console.print(
         Panel(
@@ -1923,9 +1929,20 @@ def setup() -> None:
     console.print(f"\n[cyan]selected engine: {selected_engine['name']}[/cyan]")
 
     if selected_engine["key"] == "parakeet":
-        # parakeet downloads model on first use from HuggingFace
-        console.print("[cyan]parakeet model will be downloaded on first use (~2.5 GB)[/cyan]")
-        console.print("[green]✓[/green] parakeet engine selected")
+        console.print("[cyan]downloading parakeet model (first use ~2.5 GB)...[/cyan]")
+        try:
+            from huggingface_hub import hf_hub_download
+
+            model_name = selected_engine["default_model"]
+            if force_download:
+                console.print("[cyan]force re-downloading parakeet model...[/cyan]")
+            hf_hub_download(model_name, "config.json", force_download=force_download)
+            hf_hub_download(model_name, "model.safetensors", force_download=force_download)
+            console.print("[green]✓[/green] parakeet model ready")
+        except Exception as e:
+            console.print(f"[red]✗[/red] parakeet model download failed: {e}")
+            console.print("[yellow]check your internet connection and try again[/yellow]")
+            return
 
         # update config
         config.config["models"]["stt_engine"] = "parakeet"
@@ -1963,7 +1980,7 @@ def setup() -> None:
         console.print(f"\n[cyan]selected: {vosk_model_name.replace('vosk-model-', '')}[/cyan]")
 
         # download vosk model if needed
-        if verify_vosk_model(vosk_model_name, models_dir / "vosk"):
+        if not force_download and verify_vosk_model(vosk_model_name, models_dir / "vosk"):
             console.print("[green]✓[/green] vosk model already installed")
         else:
             console.print("[cyan]downloading vosk model...[/cyan]")
@@ -2041,7 +2058,7 @@ def setup() -> None:
         console.print(f"\n[cyan]selected: {mlx_model_name.split('/')[-1]}[/cyan]")
 
         # verify/download if needed
-        if verify_mlx_whisper_model(mlx_model_name, models_dir):
+        if not force_download and verify_mlx_whisper_model(mlx_model_name, models_dir):
             console.print(
                 f"[green]✓[/green] mlx-whisper {mlx_model_name.split('/')[-1]} already installed"
             )
@@ -2096,7 +2113,7 @@ def setup() -> None:
         console.print(f"\n[cyan]selected: {stt_model_name}[/cyan]")
 
         # download if needed
-        if verify_whisper_model(stt_model_name, models_dir):
+        if not force_download and verify_whisper_model(stt_model_name, models_dir):
             console.print(f"[green]✓[/green] whisper {stt_model_name} already installed")
         else:
             console.print(f"[cyan]downloading whisper {stt_model_name}...[/cyan]")
@@ -2147,7 +2164,7 @@ def setup() -> None:
     seg_model_path = seg_model_dir / "model.onnx"
     emb_model_path = models_dir / "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
 
-    if seg_model_path.exists() and emb_model_path.exists():
+    if not force_download and seg_model_path.exists() and emb_model_path.exists():
         console.print("[green]✓[/green] diarization models already downloaded")
     else:
         download_diar = typer.confirm("download diarization models?", default=True)
@@ -2155,7 +2172,7 @@ def setup() -> None:
             import tarfile
 
             # download segmentation model
-            if not seg_model_path.exists():
+            if force_download or not seg_model_path.exists():
                 console.print("[cyan]downloading segmentation model (~5 MB)...[/cyan]")
                 seg_url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
                 seg_archive = models_dir / "sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
@@ -2169,7 +2186,7 @@ def setup() -> None:
                     console.print(f"[red]✗[/red] segmentation model download failed: {e}")
 
             # download embedding model
-            if not emb_model_path.exists():
+            if force_download or not emb_model_path.exists():
                 console.print("[cyan]downloading embedding model (~38 MB)...[/cyan]")
                 emb_url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
                 try:
@@ -2222,7 +2239,7 @@ def setup() -> None:
     repo = llm_choice["repo"]
 
     # check if already available
-    if verify_mlx_llm_model(repo):
+    if not force_download and verify_mlx_llm_model(repo):
         console.print(f"[green]✓[/green] {llm_choice['name']} already installed")
     else:
         console.print(f"[cyan]downloading {llm_choice['name']} ({llm_choice['size']})...[/cyan]")

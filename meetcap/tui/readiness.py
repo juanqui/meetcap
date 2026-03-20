@@ -115,7 +115,29 @@ def _check_stt(result: ReadinessResult, config: object, engine: str) -> None:
                 )
             )
             return
-        # parakeet downloads on first use from HuggingFace, so just check package
+        # check if model is actually cached
+        try:
+            from pathlib import Path
+
+            from huggingface_hub import try_to_load_from_cache
+
+            parakeet_model = config.get(  # type: ignore[union-attr]
+                "models", "parakeet_model_name", "mlx-community/parakeet-tdt-0.6b-v3"
+            )
+            config_path = try_to_load_from_cache(parakeet_model, "config.json")
+            if config_path is None or (
+                isinstance(config_path, str) and not Path(config_path).exists()
+            ):
+                result.issues.append(
+                    ReadinessIssue(
+                        component="stt",
+                        severity="warning",
+                        message="Parakeet model not downloaded yet (~2.5 GB)",
+                        fix_hint="Run: meetcap setup",
+                    )
+                )
+        except ImportError:
+            pass  # huggingface_hub not available, skip cache check
     elif engine in ("faster-whisper", "fwhisper"):
         if not _is_package_installed("faster_whisper"):
             result.issues.append(
