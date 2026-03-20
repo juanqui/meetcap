@@ -14,14 +14,14 @@ meetcap is an offline meeting recorder & summarizer for macOS that:
 
 ### Environment Requirements
 - macOS (Apple Silicon recommended for MLX-Whisper performance)
-- Python 3.11+ (managed via Hatch)
+- Python 3.11+ (managed via uv)
 - FFmpeg for audio recording
 - BlackHole for system audio capture
 
 ### Initial Setup Commands
 ```bash
-# Create/update Hatch environment
-hatch env create
+# Sync uv environment
+uv sync
 
 # Install for development (with all extras)
 pip install -e ".[dev,stt,mlx-stt,vosk-stt]"
@@ -35,55 +35,54 @@ pre-commit install
 ### Testing
 ```bash
 # Run tests with coverage
-hatch run test
-hatch run test-cov
+uv run pytest
+uv run pytest --cov=meetcap
 
 # Run specific test file
-hatch run pytest tests/test_cli.py -v
+uv run pytest tests/test_cli.py -v
 
 # Run single test
-hatch run pytest tests/test_cli.py::test_record_command -v
+uv run pytest tests/test_cli.py::test_record_command -v
 ```
 
 ### Code Quality
 ```bash
 # Format code (auto-fix)
-hatch run fmt
-hatch run format
+uv run ruff format . && uv run ruff check --fix .
 
 # Lint code (check only)
-hatch run lint
+uv run ruff check . && uv run ruff format --check .
 ```
 
 ### Building
 ```bash
 # Build distribution packages
-hatch build
+uv build
 ```
 
 ### Application Commands (Development Mode)
-**Important**: Always use `hatch run` prefix for development to ensure proper environment activation.
+**Important**: Always use `uv run` prefix for development to ensure proper environment activation.
 
 ```bash
 # Recording operations
-hatch run meetcap record                    # Start recording with default device
-hatch run meetcap record --stt mlx          # Use MLX-Whisper (Apple Silicon)
-hatch run meetcap record --stt vosk         # Use Vosk with speaker identification
-hatch run meetcap record --device "Aggregate Device"  # Specify device
+uv run meetcap record                    # Start recording with default device
+uv run meetcap record --stt mlx          # Use MLX-Whisper (Apple Silicon)
+uv run meetcap record --stt vosk         # Use Vosk with speaker identification
+uv run meetcap record --device "Aggregate Device"  # Specify device
 
 # Processing operations
-hatch run meetcap summarize audio.m4a       # Process existing audio file
-hatch run meetcap summarize --stt mlx audio.wav  # Process with specific STT engine
+uv run meetcap summarize audio.m4a       # Process existing audio file
+uv run meetcap summarize --stt mlx audio.wav  # Process with specific STT engine
 
 # Reprocessing operations
-hatch run meetcap reprocess 2025_Jan_15_TeamStandup  # Reprocess both transcript & summary
-hatch run meetcap reprocess recording_dir --mode summary  # Reprocess summary only
-hatch run meetcap reprocess --stt mlx --yes recording  # Change STT engine, skip confirm
+uv run meetcap reprocess 2025_Jan_15_TeamStandup  # Reprocess both transcript & summary
+uv run meetcap reprocess recording_dir --mode summary  # Reprocess summary only
+uv run meetcap reprocess --stt mlx --yes recording  # Change STT engine, skip confirm
 
 # System operations
-hatch run meetcap devices                   # List audio devices
-hatch run meetcap verify                    # Verify system setup
-hatch run meetcap setup                     # Interactive setup wizard
+uv run meetcap devices                   # List audio devices
+uv run meetcap verify                    # Verify system setup
+uv run meetcap setup                     # Interactive setup wizard
 ```
 
 ## Architecture & Key Components
@@ -217,16 +216,16 @@ This project uses `bump2version` to manage application versions. The configurati
 - Tag format: `v{new_version}`
 
 #### Version Bumping Commands
-**Important**: Always use `hatch run` prefix for version bumping to ensure proper environment activation.
+**Important**: Always use `uv run` prefix for version bumping to ensure proper environment activation.
 
 ```bash
 # Bump version (major, minor, or patch)
-hatch run bump2version major
-hatch run bump2version minor
-hatch run bump2version patch
+uv run bump2version major
+uv run bump2version minor
+uv run bump2version patch
 
 # Bump version without committing/tagging (for testing)
-hatch run bump2version --no-commit major
+uv run bump2version --no-commit major
 ```
 
 #### Version File Locations
@@ -285,7 +284,7 @@ Types: feat, fix, chore, docs, refactor, test
 
 ## Development Workflow Tips
 
-1. **Always use `hatch run`** for any Python execution in development
+1. **Always use `uv run`** for any Python execution in development
 2. **Test audio recording** with short durations first (10-30 seconds)
 3. **Check permissions** with `meetcap verify` after setup
 4. **Use environment variables** for quick model/engine switching during development

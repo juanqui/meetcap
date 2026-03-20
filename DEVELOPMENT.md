@@ -1,25 +1,25 @@
 # Development Guide for meetcap
 
-This project uses [Hatch](https://hatch.pypa.io/latest/) for dependency management, environment handling, and build processes. This guide will help you get started with development and releasing new versions.
+This project uses [uv](https://docs.astral.sh/uv/) for dependency management, environment handling, and build processes. This guide will help you get started with development and releasing new versions.
 
 ## Prerequisites
 
 - macOS (required for audio capture functionality)
 - Python 3.10 or higher
-- [Hatch](https://hatch.pypa.io/latest/install/) installed globally
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) installed globally
 - ffmpeg (install with `brew install ffmpeg`)
 
-### Installing Hatch
+### Installing uv
 
 ```bash
-# Install via pipx (recommended)
-pipx install hatch
+# Install via the official installer (recommended)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Or via Homebrew
+brew install uv
 
 # Or via pip
-pip install hatch
-
-# Or via conda
-conda install -c conda-forge hatch
+pip install uv
 ```
 
 ## Project Overview
@@ -36,8 +36,8 @@ meetcap is an offline meeting recorder & summarizer for macOS that captures syst
 
 2. **Create and activate the default development environment**
    ```bash
-   # Hatch will automatically create a virtual environment and install dependencies
-   hatch shell
+   # uv will automatically create a virtual environment and install dependencies
+   uv sync
    ```
 
 3. **Install development dependencies**
@@ -49,7 +49,7 @@ meetcap is an offline meeting recorder & summarizer for macOS that captures syst
 4. **Verify the installation**
    ```bash
    # Run tests to ensure everything is working
-   hatch run test
+   uv run pytest
    ```
 
 ## Environment Management
@@ -59,14 +59,11 @@ meetcap is an offline meeting recorder & summarizer for macOS that captures syst
 The project includes a pre-configured default environment with all essential development dependencies:
 
 ```bash
-# Enter the development shell
-hatch shell
+# Sync the development environment
+uv sync
 
-# Run commands in the environment without entering the shell
-hatch run <command>
-
-# Show available environments
-hatch env show
+# Run commands in the environment
+uv run <command>
 ```
 
 ### Working with Optional Dependencies
@@ -92,48 +89,48 @@ pip install -e ".[dev,stt,llm]"
 
 ## Development Tasks
 
-All common development tasks are configured as Hatch scripts:
+All common development tasks are configured as uv scripts:
 
 ### Testing
 
 ```bash
 # Run all tests
-hatch run test
+uv run pytest
 
 # Run tests with coverage reporting
-hatch run test-cov
+uv run pytest --cov=meetcap
 
 # Run specific test files or patterns
-hatch run test tests/test_cli.py
-hatch run test -k "test_devices"
-hatch run test -v --tb=short
+uv run pytest tests/test_cli.py
+uv run pytest -k "test_devices"
+uv run pytest -v --tb=short
 ```
 
 ### Code Quality
 
 ```bash
 # Format code with ruff
-hatch run format
+uv run ruff format . && uv run ruff check --fix .
 
 # Run linters and format checks
-hatch run lint
+uv run ruff check . && uv run ruff format --check .
 
 # Run individual tools manually if needed
-hatch run ruff format --check .
-hatch run ruff check .
-hatch run mypy meetcap
+uv run ruff format --check .
+uv run ruff check .
+uv run mypy meetcap
 ```
 
 ### Running the CLI
 
 ```bash
 # Run meetcap commands in development
-hatch run record           # Record from audio device
-hatch run devices          # List audio devices
-hatch run verify           # Quick verification
+uv run meetcap record           # Record from audio device
+uv run meetcap devices          # List audio devices
+uv run meetcap verify           # Quick verification
 
 # Or use the full CLI
-hatch run python -m meetcap.cli --help
+uv run python -m meetcap.cli --help
 ```
 
 ## Development Workflow
@@ -146,10 +143,7 @@ git clone https://github.com/juanqui/meetcap.git
 cd meetcap
 
 # Set up development environment
-hatch shell
-
-# Install with development dependencies
-pip install -e .[dev,stt,llm]
+uv sync
 
 # Install pre-commit hooks (see Git Hooks section)
 pre-commit install
@@ -164,24 +158,24 @@ git checkout -b feature/your-feature
 # Make your changes...
 
 # Format and lint your code
-hatch run format
-hatch run lint
+uv run ruff format . && uv run ruff check --fix .
+uv run ruff check . && uv run ruff format --check .
 
 # Run tests to ensure nothing is broken
-hatch run test
+uv run pytest
 ```
 
 ### 3. Before Committing
 
 ```bash
 # Run full test suite with coverage
-hatch run test-cov
+uv run pytest --cov=meetcap
 
 # Ensure code is properly formatted
-hatch run lint
+uv run ruff check . && uv run ruff format --check .
 
 # Check that build works
-hatch build
+uv build
 ```
 
 ## Releasing New Versions
@@ -226,7 +220,7 @@ This will automatically:
 
 ```bash
 # Build the package locally
-hatch build
+uv build
 
 # Check the build
 pip install twine
@@ -317,23 +311,17 @@ All tool configurations are in `pyproject.toml`:
 The project supports Python 3.10 through 3.12. To test against different Python versions:
 
 ```bash
-# Create environments for different Python versions
-hatch env create py310 --python=3.10
-hatch env create py311 --python=3.11
-hatch env create py312 --python=3.12
-
 # Test against specific version
-hatch run --env py311 test
+uv run --python 3.10 pytest
+uv run --python 3.11 pytest
+uv run --python 3.12 pytest
 ```
 
 ## Building and Distribution
 
 ```bash
 # Build wheel and source distribution
-hatch build
-
-# Clean build artifacts
-hatch clean
+uv build
 
 # Check build output
 twine check dist/*
@@ -372,17 +360,14 @@ The project includes automated CI/CD:
 ### Getting Help
 
 ```bash
-# Show hatch help
-hatch --help
-
-# Show environment information
-hatch env show
+# Show uv help
+uv --help
 
 # Show project dependencies
-hatch dep show requirements
+uv pip list
 
-# Debug environment issues
-hatch shell --verbose
+# Sync environment
+uv sync
 ```
 
 ## Contributing
@@ -395,7 +380,7 @@ hatch shell --verbose
 
 ## Additional Resources
 
-- [Hatch Documentation](https://hatch.pypa.io/latest/)
+- [uv Documentation](https://docs.astral.sh/uv/)
 - [bump2version Documentation](https://github.com/c4urself/bump2version)
 - [Pre-commit Documentation](https://pre-commit.com/)
 - [Project Issues](https://github.com/juanqui/meetcap/issues)

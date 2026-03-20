@@ -629,8 +629,8 @@ The hatch default environment should also include both for development/testing.
 
 ### Acceptance Criteria
 
-1. `hatch run test` passes with >=74% coverage
-2. `hatch run lint` passes
+1. `uv run pytest` passes with >=74% coverage
+2. `uv run ruff check . && uv run ruff format --check .` passes
 3. `meetcap record --stt parakeet` produces valid transcript
 4. `meetcap record --stt parakeet --diarize` produces speaker-attributed transcript
 5. Parakeet transcription is >=10x realtime on Apple Silicon

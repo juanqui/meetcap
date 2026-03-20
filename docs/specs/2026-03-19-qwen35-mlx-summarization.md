@@ -620,20 +620,20 @@ Users with existing GGUF files in `~/.meetcap/models/` are not affected — the 
 
 ### Manual Validation
 
-1. `hatch run meetcap setup` — verify LLM step offers 4B/9B choice and downloads work
-2. `hatch run meetcap verify` — verify MLX LLM model check passes
-3. `hatch run meetcap summarize` — run on a real recording, verify:
+1. `uv run meetcap setup` — verify LLM step offers 4B/9B choice and downloads work
+2. `uv run meetcap verify` — verify MLX LLM model check passes
+3. `uv run meetcap summarize` — run on a real recording, verify:
    - Summary quality matches or exceeds old GGUF output
    - All markdown sections present
    - Transcript appended at end of `.summary.md`
    - Thinking tags cleaned from output
-4. `hatch run meetcap reprocess` — verify reprocessing with new engine works
+4. `uv run meetcap reprocess` — verify reprocessing with new engine works
 5. Config migration — start with old `config.toml` containing `llm_gguf_path`, verify auto-migration
 
 ### Acceptance Criteria
 
-1. `hatch run test` passes with ≥74% coverage
-2. `hatch run lint` passes
+1. `uv run pytest` passes with ≥74% coverage
+2. `uv run ruff check . && uv run ruff format --check .` passes
 3. `llama-cpp-python` is no longer in any dependency list
 4. Default model is `mlx-community/Qwen3.5-4B-MLX-4bit`
 5. Summary files contain `## Full Transcript` section at end
