@@ -38,7 +38,7 @@ class HotkeyManager:
         self._last_trigger = 0.0
         self._debounce_interval = 0.5  # seconds
         self._stop_event = threading.Event()
-        self._state_lock = threading.Lock()
+        self._state_lock = threading.RLock()  # reentrant: callbacks may nest
 
         # Prefix key state tracking
         self._prefix_active = False

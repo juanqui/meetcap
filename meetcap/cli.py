@@ -209,8 +209,8 @@ class RecordingOrchestrator:
         if hasattr(service, "unload_model"):
             try:
                 service.unload_model()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"failed to cleanup {service_name}: {e}")
         if self.config.get("memory", "aggressive_gc", True):
             import gc
 

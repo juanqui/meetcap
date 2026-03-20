@@ -34,6 +34,10 @@ class DiarizationService:
         """explicitly unload model from memory."""
         raise NotImplementedError
 
+    def is_loaded(self) -> bool:
+        """check if model is currently loaded in memory."""
+        return getattr(self, "sd", None) is not None
+
 
 class SherpaOnnxDiarizationService(DiarizationService):
     """speaker diarization using sherpa-onnx with pyannote segmentation"""

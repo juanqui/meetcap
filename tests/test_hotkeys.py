@@ -392,7 +392,7 @@ class TestHotkeyIntegration:
         """test that hotkey manager has thread-safe state lock"""
         manager = HotkeyManager(Mock())
         assert hasattr(manager, "_state_lock")
-        assert isinstance(manager._state_lock, type(threading.Lock()))
+        assert isinstance(manager._state_lock, type(threading.RLock()))
 
     def test_state_lock_used_in_prefix_key(self):
         """test that _state_lock is acquired during prefix key activation"""
