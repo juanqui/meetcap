@@ -55,7 +55,7 @@ meetcap is a python cli for macos that captures both system audio (speaker) and 
 * scheduled stop timer with hotkey extension/cancellation
 * reprocessing: regenerate transcripts/summaries with different models
 * setup wizard: interactive model selection and download
-* offline by construction, reproducible via hatch env
+* offline by construction, reproducible via uv
 
 ---
 
@@ -116,7 +116,7 @@ user          cli           orchestrator    recorder(ffmpeg)   hotkey    stt svc
 * **core python packages**: `pynput`, `rich`, `typer`, `tomli`/`tomllib`, `toml`, `urllib3`, `mlx-vlm[torch]`, `psutil`
 * **optional STT extras**: `[stt]` faster-whisper, `[mlx-stt]` mlx-whisper, `[vosk-stt]` vosk+soundfile+scikit-learn
 * **diarization** (implicit): `sherpa-onnx`, `librosa`, `soundfile`
-* **hatch** — env and packaging
+* **uv** — project management and packaging (hatchling build backend)
 
 ---
 
@@ -439,8 +439,8 @@ sherpa_cluster_threshold = 0.85  # 0.0-1.0
 
 ## 17. Packaging & Reproducibility
 
-* `pyproject.toml` managed by hatch; pinned minor versions
-* hatch scripts for `meetcap:record`, `meetcap:devices`, `meetcap:verify`
+* `pyproject.toml` managed by uv with hatchling build backend; pinned minor versions with upper bounds
+* `uv run meetcap record`, `uv run meetcap devices`, `uv run meetcap verify`
 * installation doc covers: brew ffmpeg, blackhole setup, model placement
 
 ---
@@ -476,7 +476,7 @@ sherpa_cluster_threshold = 0.85  # 0.0-1.0
 * session metadata capture (attendees) and calendar integration (still offline)
 * tui and/or small menu bar helper app
 * ScreenCaptureKit integration to replace BlackHole dependency (pending PyObjC maturity)
-* migration from Hatch to uv for faster dependency management
+* ~~migration from Hatch to uv for faster dependency management~~ — **implemented** (2026-03-20)
 * `parakeet-mlx` library evaluation as drop-in STT backend
 
 ---

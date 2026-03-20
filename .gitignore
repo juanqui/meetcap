@@ -26,8 +26,8 @@ ENV/
 env/
 .venv/
 
-# Hatch
-.hatch/
+# Ruff
+.ruff_cache/
 
 # IDE
 .vscode/
