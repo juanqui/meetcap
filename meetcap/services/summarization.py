@@ -86,7 +86,7 @@ class SummarizationService:
         try:
             import mlx.core as mx
 
-            mx.metal.clear_cache()
+            mx.clear_cache()
         except (ImportError, Exception):
             pass
         console.print("[dim]llm model unloaded[/dim]")

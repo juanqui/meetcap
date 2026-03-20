@@ -59,9 +59,7 @@ jobs:
 
     - name: Check package metadata
       if: matrix.python-version == '3.11'
-      run: |
-        uv run pip install twine
-        uv run twine check dist/*
+      run: uvx twine check dist/*
 
     - name: Upload build artifacts
       if: matrix.python-version == '3.11'

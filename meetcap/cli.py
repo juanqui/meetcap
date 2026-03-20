@@ -2186,7 +2186,7 @@ def verify() -> None:
         console.print("ready to record with: meetcap record")
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def main(
     version: bool = typer.Option(
         False,
