@@ -650,9 +650,9 @@ class TestSettingsDropdownOptions:
             "setting-temperature",
         ]
         for field_id in must_be_select:
-            assert (
-                field_id not in input_ids
-            ), f"'{field_id}' is a free-text Input but should be a Select dropdown"
+            assert field_id not in input_ids, (
+                f"'{field_id}' is a free-text Input but should be a Select dropdown"
+            )
 
 
 class TestSetupScreenCompose:
