@@ -75,8 +75,10 @@ class TestCheckFfmpeg:
         from meetcap.tui.readiness import ReadinessResult, _check_ffmpeg
 
         result = ReadinessResult()
-        _check_ffmpeg(result)
-        # ffmpeg should be installed on this machine
+        # mock ffmpeg as available (CI may not have it)
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            _check_ffmpeg(result)
         assert not any(i.component == "ffmpeg" for i in result.issues)
 
     def test_ffmpeg_not_found(self) -> None:

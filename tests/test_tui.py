@@ -447,6 +447,13 @@ class TestConfigIsConfigured:
 class TestCLITuiIntegration:
     """test CLI --no-tui flag and TUI launch logic."""
 
+    @staticmethod
+    def _strip_ansi(text: str) -> str:
+        """remove ANSI escape codes from text."""
+        import re
+
+        return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
     def test_record_has_no_tui_option(self) -> None:
         """verify the --no-tui flag exists on the record command."""
         from typer.testing import CliRunner
@@ -455,7 +462,7 @@ class TestCLITuiIntegration:
 
         runner = CliRunner()
         result = runner.invoke(app, ["record", "--help"])
-        assert "--no-tui" in result.output
+        assert "--no-tui" in self._strip_ansi(result.output)
 
     def test_summarize_has_no_tui_option(self) -> None:
         """verify the --no-tui flag exists on the summarize command."""
@@ -465,7 +472,7 @@ class TestCLITuiIntegration:
 
         runner = CliRunner()
         result = runner.invoke(app, ["summarize", "--help"])
-        assert "--no-tui" in result.output
+        assert "--no-tui" in self._strip_ansi(result.output)
 
     def test_reprocess_has_no_tui_option(self) -> None:
         """verify the --no-tui flag exists on the reprocess command."""
@@ -475,7 +482,7 @@ class TestCLITuiIntegration:
 
         runner = CliRunner()
         result = runner.invoke(app, ["reprocess", "--help"])
-        assert "--no-tui" in result.output
+        assert "--no-tui" in self._strip_ansi(result.output)
 
     def test_launch_tui_function_exists(self) -> None:
         """verify _launch_tui helper function exists."""
@@ -1189,8 +1196,10 @@ class TestSetupScreenNavigation:
             screen = app.screen
             assert screen._current_step == 0
             await _pilot.click("#setup-next")
+            await _pilot.pause()
             assert screen._current_step == 1
             await _pilot.click("#setup-next")
+            await _pilot.pause()
             assert screen._current_step == 2
 
     @pytest.mark.asyncio
