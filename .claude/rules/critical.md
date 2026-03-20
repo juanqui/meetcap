@@ -55,6 +55,10 @@ uv run pytest 2>&1 | tail -40
 uv run pytest 2>&1 | grep -iE "error"
 ```
 
+## Version Bumping
+
+Never edit `__version__` in `meetcap/__init__.py` manually. Always use `uv run bump-my-version bump {patch|minor|major}`. Manual edits desync `pyproject.toml`'s `[tool.bumpversion] current_version`, the source file, and git tags — breaking all future version bumps.
+
 ## Cost-Sensitive Configuration
 
 Never modify model configuration, LLM model selections, or any setting that affects resource consumption without explicit user permission. This includes changes to `config.toml`, model paths, or GGUF files.

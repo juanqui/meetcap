@@ -647,6 +647,132 @@ class MlxWhisperService(TranscriptionService):
         console.print("[dim]mlx-whisper model unloaded[/dim]")
 
 
+class ParakeetService(TranscriptionService):
+    """transcription using Parakeet TDT via parakeet-mlx (Apple Silicon optimized)"""
+
+    def __init__(
+        self,
+        model_name: str = "mlx-community/parakeet-tdt-0.6b-v3",
+        language: str | None = None,
+    ):
+        self.model_name = model_name
+        self.language = language
+        self.model = None
+        self._is_loaded = False
+        self._load_lock = threading.Lock()
+
+    def _load_model(self) -> None:
+        """lazy load the parakeet model on first use."""
+        if self._is_loaded:
+            return
+        with self._load_lock:
+            if self._is_loaded:
+                return
+            try:
+                from parakeet_mlx import from_pretrained
+            except ImportError as e:
+                raise ImportError(
+                    "parakeet-mlx not installed. install with: pip install parakeet-mlx"
+                ) from e
+
+            console.print(f"[cyan]loading parakeet model '{self.model_name}'...[/cyan]")
+            self.model = from_pretrained(self.model_name)
+            self._is_loaded = True
+            console.print("[green]✓[/green] parakeet model ready")
+
+    def transcribe(self, audio_path: Path) -> TranscriptResult:
+        """transcribe audio file using parakeet TDT."""
+        if not audio_path.exists():
+            raise FileNotFoundError(f"audio file not found: {audio_path}")
+
+        self._load_model()
+
+        console.print(f"[cyan]transcribing {audio_path.name} with parakeet...[/cyan]")
+        start_time = time.time()
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True,
+        ) as progress:
+            task = progress.add_task("transcribing audio...", total=None)
+
+            try:
+                result = self.model.transcribe(str(audio_path))
+                progress.update(
+                    task,
+                    description="processing segments...",
+                )
+
+                segments = []
+                for i, sentence in enumerate(result.sentences):
+                    segments.append(
+                        TranscriptSegment(
+                            id=i,
+                            start=sentence.start,
+                            end=sentence.end,
+                            text=sentence.text,
+                            confidence=getattr(sentence, "confidence", None),
+                        )
+                    )
+
+                detected_language = self.language or "en"
+
+            except Exception as e:
+                console.print(f"[red]parakeet transcription failed: {e}[/red]")
+                console.print("[yellow]falling back to mlx-whisper...[/yellow]")
+                try:
+                    fallback = MlxWhisperService(auto_download=True)
+                    return fallback.transcribe(audio_path)
+                except Exception as fallback_error:
+                    raise RuntimeError(
+                        f"both parakeet and mlx-whisper "
+                        f"failed. parakeet error: {e}, "
+                        f"fallback error: {fallback_error}"
+                    ) from e
+
+        duration = time.time() - start_time
+        audio_duration = segments[-1].end if segments else 0.0
+
+        if audio_duration > 0:
+            console.print(
+                f"[green]✓[/green] parakeet transcription "
+                f"complete: {len(segments)} segments in "
+                f"{duration:.1f}s "
+                f"(speed: {audio_duration / duration:.1f}x)"
+            )
+
+        return TranscriptResult(
+            audio_path=str(audio_path),
+            sample_rate=16000,
+            language=detected_language,
+            segments=segments,
+            duration=audio_duration,
+            stt={
+                "engine": "parakeet",
+                "model_name": self.model_name,
+            },
+        )
+
+    def unload_model(self) -> None:
+        """unload parakeet model from memory."""
+        if self.model is not None:
+            del self.model
+            self.model = None
+            self._is_loaded = False
+            try:
+                import mlx.core as mx
+
+                mx.metal.clear_cache()
+            except (ImportError, AttributeError):
+                pass
+            import gc
+
+            gc.collect()
+            console.print("[dim]parakeet model unloaded[/dim]")
+
+
 class VoskTranscriptionService(TranscriptionService):
     """transcription using vosk with speaker diarization support"""
 

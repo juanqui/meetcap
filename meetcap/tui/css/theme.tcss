@@ -1,0 +1,21 @@
+Screen {
+    background: $surface;
+}
+
+.hidden {
+    display: none;
+}
+
+/* Section titles */
+#home-title, #setup-title, #process-title, #settings-title {
+    text-align: center;
+    text-style: bold;
+    padding: 1 0;
+    color: $primary;
+}
+
+#home-subtitle {
+    text-align: center;
+    color: $text-muted;
+    padding: 0 0 1 0;
+}

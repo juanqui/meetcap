@@ -4,7 +4,7 @@ import json
 import subprocess
 import threading
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -707,3 +707,166 @@ class TestMlxWhisperService:
             assert result.stt["engine"] == "faster-whisper"
             assert result.segments[0].text == "Fallback text"
             mock_faster_service.transcribe.assert_called_once_with(audio_file)
+
+
+class TestParakeetService:
+    """tests for ParakeetService."""
+
+    def test_init_defaults(self):
+        """test default initialization."""
+        from meetcap.services.transcription import ParakeetService
+
+        service = ParakeetService()
+        assert service.model_name == "mlx-community/parakeet-tdt-0.6b-v3"
+        assert service.language is None
+        assert service.model is None
+        assert service._is_loaded is False
+
+    def test_init_custom_model(self):
+        """test initialization with custom model name."""
+        from meetcap.services.transcription import ParakeetService
+
+        service = ParakeetService(model_name="custom/model", language="en")
+        assert service.model_name == "custom/model"
+        assert service.language == "en"
+
+    def test_load_model_import_error(self):
+        """test that missing parakeet-mlx raises ImportError."""
+        from meetcap.services.transcription import ParakeetService
+
+        service = ParakeetService()
+        with patch.dict("sys.modules", {"parakeet_mlx": None}):
+            with pytest.raises(ImportError, match="parakeet-mlx not installed"):
+                service._load_model()
+
+    def test_load_model_success(self):
+        """test successful model loading."""
+        from meetcap.services.transcription import ParakeetService
+
+        mock_parakeet = MagicMock()
+        mock_model = MagicMock()
+        mock_parakeet.from_pretrained.return_value = mock_model
+
+        service = ParakeetService()
+        with patch.dict("sys.modules", {"parakeet_mlx": mock_parakeet}):
+            service._load_model()
+            assert service._is_loaded is True
+            assert service.model is mock_model
+
+    def test_load_model_idempotent(self):
+        """test that loading twice doesn't reload."""
+        from meetcap.services.transcription import ParakeetService
+
+        service = ParakeetService()
+        service._is_loaded = True
+        service.model = MagicMock()
+        original_model = service.model
+        service._load_model()
+        assert service.model is original_model
+
+    def test_transcribe_file_not_found(self, temp_dir):
+        """test transcribe with missing file."""
+        from meetcap.services.transcription import ParakeetService
+
+        service = ParakeetService()
+        service._is_loaded = True
+        service.model = MagicMock()
+        with pytest.raises(FileNotFoundError):
+            service.transcribe(temp_dir / "nonexistent.wav")
+
+    def test_transcribe_success(self, temp_dir):
+        """test successful transcription with mock model."""
+        from meetcap.services.transcription import ParakeetService, TranscriptResult
+
+        # create fake audio file
+        audio_file = temp_dir / "test.wav"
+        audio_file.write_bytes(b"\x00" * 1000)
+
+        # mock sentence objects
+        mock_sentence1 = MagicMock()
+        mock_sentence1.start = 0.0
+        mock_sentence1.end = 2.5
+        mock_sentence1.text = "Hello world."
+        mock_sentence1.confidence = 0.95
+
+        mock_sentence2 = MagicMock()
+        mock_sentence2.start = 2.5
+        mock_sentence2.end = 5.0
+        mock_sentence2.text = "Testing parakeet."
+        mock_sentence2.confidence = 0.98
+
+        mock_result = MagicMock()
+        mock_result.sentences = [mock_sentence1, mock_sentence2]
+
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = mock_result
+
+        service = ParakeetService()
+        service._is_loaded = True
+        service.model = mock_model
+
+        result = service.transcribe(audio_file)
+
+        assert isinstance(result, TranscriptResult)
+        assert len(result.segments) == 2
+        assert result.segments[0].text == "Hello world."
+        assert result.segments[0].start == 0.0
+        assert result.segments[0].end == 2.5
+        assert result.segments[0].confidence == 0.95
+        assert result.segments[1].text == "Testing parakeet."
+        assert result.stt["engine"] == "parakeet"
+        assert result.duration == 5.0
+
+    def test_transcribe_fallback_to_mlx(self, temp_dir):
+        """test fallback to mlx-whisper when parakeet fails."""
+        from meetcap.services.transcription import ParakeetService, TranscriptResult
+
+        audio_file = temp_dir / "test.wav"
+        audio_file.write_bytes(b"\x00" * 1000)
+
+        # mock model that raises exception
+        mock_model = MagicMock()
+        mock_model.transcribe.side_effect = RuntimeError("parakeet crash")
+
+        # mock fallback result
+        fallback_result = TranscriptResult(
+            audio_path=str(audio_file),
+            sample_rate=16000,
+            language="en",
+            segments=[],
+            duration=0.0,
+            stt={"engine": "mlx-whisper"},
+        )
+
+        service = ParakeetService()
+        service._is_loaded = True
+        service.model = mock_model
+
+        with patch("meetcap.services.transcription.MlxWhisperService") as MockMlx:
+            mock_mlx_instance = MagicMock()
+            mock_mlx_instance.transcribe.return_value = fallback_result
+            MockMlx.return_value = mock_mlx_instance
+
+            result = service.transcribe(audio_file)
+            assert result.stt["engine"] == "mlx-whisper"
+
+    def test_unload_model(self):
+        """test model unloading."""
+        from meetcap.services.transcription import ParakeetService
+
+        service = ParakeetService()
+        service.model = MagicMock()
+        service._is_loaded = True
+
+        service.unload_model()
+        assert service.model is None
+        assert service._is_loaded is False
+
+    def test_is_loaded(self):
+        """test is_loaded property."""
+        from meetcap.services.transcription import ParakeetService
+
+        service = ParakeetService()
+        assert service.is_loaded() is False
+        service._is_loaded = True
+        assert service.is_loaded() is True

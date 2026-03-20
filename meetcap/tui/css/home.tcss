@@ -1,0 +1,59 @@
+#home-container {
+    layout: vertical;
+    padding: 1 2;
+}
+
+#readiness-banner {
+    height: auto;
+    padding: 1 2;
+    margin: 0 0 1 0;
+    background: $panel;
+    border: tall $success;
+    color: $success;
+}
+
+#readiness-banner.readiness-error {
+    border: tall $error;
+    color: $error;
+    background: $surface;
+}
+
+#btn-run-setup {
+    margin: 0 2 1 2;
+    width: auto;
+}
+
+#quick-actions {
+    height: auto;
+    margin: 1 0;
+    padding: 1;
+}
+
+#quick-action-buttons {
+    layout: horizontal;
+    height: auto;
+    align: center middle;
+}
+
+#quick-action-buttons Button {
+    margin: 0 1;
+    min-width: 20;
+}
+
+#recent-title, #status-title {
+    text-style: bold;
+    padding: 1 0 0 0;
+    color: $secondary;
+}
+
+#recent-recordings {
+    height: 8;
+    margin: 0 0 1 0;
+}
+
+#system-status {
+    height: auto;
+    padding: 1;
+    background: $panel;
+    border: tall $primary;
+}

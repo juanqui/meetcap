@@ -48,10 +48,13 @@ MEETCAP_SHERPA_THRESHOLD    # clustering threshold (0.0-1.0)
 
 ## Version Management
 
-Uses `bump2version` for versioning. Version defined in `meetcap/__init__.py`.
+Uses `bump-my-version` (maintained successor to `bump2version`) for versioning. Configuration lives in `pyproject.toml` under `[tool.bumpversion]`. The single source of truth for the version string is `meetcap/__init__.py`.
 
 ```bash
-uv run bump2version patch   # 1.3.1 → 1.3.2
-uv run bump2version minor   # 1.3.1 → 1.4.0
-uv run bump2version major   # 1.3.1 → 2.0.0
+uv run bump-my-version bump patch   # 2.0.0 → 2.0.1
+uv run bump-my-version bump minor   # 2.0.0 → 2.1.0
+uv run bump-my-version bump major   # 2.0.0 → 3.0.0
+uv run bump-my-version show current_version  # show current version
 ```
+
+**NEVER edit `__version__` manually.** Always use `bump-my-version` so that `pyproject.toml` (`[tool.bumpversion] current_version`), `meetcap/__init__.py`, and git tags stay in sync. Manual edits cause version drift that breaks future bumps.

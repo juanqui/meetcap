@@ -1,0 +1,45 @@
+StopConfirmModal, DeleteConfirmModal, ErrorModal {
+    align: center middle;
+}
+
+#stop-confirm-dialog, #delete-confirm-dialog, #error-dialog {
+    width: 60;
+    height: auto;
+    padding: 2;
+    background: $panel;
+    border: thick $primary;
+}
+
+#stop-confirm-title, #delete-confirm-title, #error-title {
+    text-style: bold;
+    text-align: center;
+    padding: 0 0 1 0;
+    color: $primary;
+}
+
+#stop-confirm-body, #delete-confirm-body, #error-message {
+    padding: 0 0 1 0;
+    text-align: center;
+}
+
+#error-suggestion {
+    padding: 0 0 1 0;
+    color: $warning;
+    text-align: center;
+}
+
+#stop-confirm-buttons, #delete-confirm-buttons {
+    layout: horizontal;
+    height: auto;
+    align: center middle;
+}
+
+#stop-confirm-buttons Button, #delete-confirm-buttons Button {
+    margin: 0 1;
+    min-width: 16;
+}
+
+#btn-close-error {
+    margin: 1 0 0 0;
+    width: 100%;
+}

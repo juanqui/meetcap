@@ -524,8 +524,12 @@ class TestCLICommands:
 
             # Mock to return different values for different calls
             def mock_get_side_effect(section, key, default=None):
-                if section == "models" and key == "llm_model_name":
+                if section == "models" and key == "stt_engine":
+                    return "faster-whisper"
+                elif section == "models" and key == "llm_model_name":
                     return "mlx-community/Qwen3.5-4B-MLX-4bit"
+                elif section == "models" and key == "enable_speaker_diarization":
+                    return False  # disable diarization for this test
                 elif section == "memory":
                     # Return proper memory config defaults
                     memory_config = {

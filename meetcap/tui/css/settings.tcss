@@ -1,0 +1,33 @@
+#settings-container {
+    layout: vertical;
+    padding: 1 2;
+    overflow-y: auto;
+}
+
+#audio-section, #stt-section, #llm-section, #diarization-section, #output-section {
+    text-style: bold;
+    color: $primary;
+    padding: 1 0 0 0;
+    margin: 1 0 0 0;
+    border: solid $primary;
+    border-top: none;
+    border-left: none;
+    border-right: none;
+}
+
+#settings-container Label {
+    padding: 0 1;
+    color: $text-muted;
+}
+
+#settings-container Input {
+    margin: 0 1 1 1;
+}
+
+#settings-container Select {
+    margin: 0 1 1 1;
+}
+
+#settings-container Checkbox {
+    margin: 0 1 1 1;
+}

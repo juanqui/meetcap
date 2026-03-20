@@ -6,6 +6,7 @@ import signal
 import sys
 import threading
 import time
+import urllib.request
 from pathlib import Path
 
 import typer
@@ -39,6 +40,7 @@ from meetcap.services.summarization import SummarizationService, extract_meeting
 from meetcap.services.transcription import (
     FasterWhisperService,
     MlxWhisperService,
+    ParakeetService,
     VoskTranscriptionService,
     WhisperCppService,
     save_transcript,
@@ -706,14 +708,22 @@ class RecordingOrchestrator:
 
         # use configured engine if not specified
         if not stt_engine:
-            stt_engine = self.config.get("models", "stt_engine", "faster-whisper")
+            stt_engine = self.config.get("models", "stt_engine", "parakeet")
             # map config names to CLI names
             if stt_engine == "faster-whisper":
                 stt_engine = "fwhisper"
             elif stt_engine == "mlx-whisper":
                 stt_engine = "mlx"
+            # parakeet and vosk use their config name directly
 
-        if stt_engine == "fwhisper":
+        if stt_engine == "parakeet":
+            parakeet_model = self.config.get(
+                "models", "parakeet_model_name", "mlx-community/parakeet-tdt-0.6b-v3"
+            )
+            stt_service = ParakeetService(
+                model_name=parakeet_model,
+            )
+        elif stt_engine == "fwhisper":
             stt_model_name = self.config.get("models", "stt_model_name", "large-v3")
             stt_model_path = self.config.expand_path(self.config.get("models", "stt_model_path"))
             stt_service = FasterWhisperService(
@@ -759,6 +769,53 @@ class RecordingOrchestrator:
                 stt_service.load_model()
 
             transcript_result = stt_service.transcribe(audio_file)
+
+            # post-STT diarization (works with any engine)
+            enable_diarization = self.config.get("models", "enable_speaker_diarization", True)
+            diarization_backend = self.config.get("models", "diarization_backend", "sherpa")
+            # skip sherpa diarization if using vosk with built-in diarization
+            if enable_diarization and diarization_backend == "sherpa" and stt_engine != "vosk":
+                try:
+                    from meetcap.services.diarization import (
+                        SherpaOnnxDiarizationService,
+                        assign_speakers,
+                    )
+
+                    console.print("\n[bold]🗣️ speaker diarization[/bold]")
+                    models_dir = self.config.expand_path(
+                        self.config.get("paths", "models_dir", "~/.meetcap/models")
+                    )
+                    seg_model = str(
+                        models_dir / "sherpa-onnx-pyannote-segmentation-3-0" / "model.onnx"
+                    )
+                    emb_model = str(
+                        models_dir / "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
+                    )
+                    num_speakers = self.config.get("models", "sherpa_num_speakers", -1)
+                    threshold = self.config.get("models", "sherpa_cluster_threshold", 0.85)
+
+                    diar_service = SherpaOnnxDiarizationService(
+                        segmentation_model=seg_model,
+                        embedding_model=emb_model,
+                        num_speakers=int(num_speakers),
+                        threshold=float(threshold),
+                    )
+                    diar_segments = diar_service.diarize(audio_file)
+                    transcript_result.segments, transcript_result.speakers = assign_speakers(
+                        transcript_result.segments, diar_segments
+                    )
+                    transcript_result.diarization_enabled = True
+                    self._cleanup_service(diar_service, "diarization")
+                except ImportError:
+                    console.print(
+                        "[yellow]⚠ sherpa-onnx not installed, skipping diarization[/yellow]"
+                    )
+                except FileNotFoundError as e:
+                    console.print(f"[yellow]⚠ diarization models not found: {e}[/yellow]")
+                    console.print("[yellow]run 'meetcap setup' to download models[/yellow]")
+                except Exception as e:
+                    console.print(f"[yellow]⚠ diarization failed: {e}[/yellow]")
+
             text_path, json_path = save_transcript(transcript_result, base_path)
 
             # explicitly unload model after transcription
@@ -1107,7 +1164,7 @@ class RecordingOrchestrator:
         # resolve actual STT engine being used
         actual_stt_engine = stt_engine
         if not actual_stt_engine and mode == "stt":
-            config_stt = self.config.get("models", "stt_engine", "faster-whisper")
+            config_stt = self.config.get("models", "stt_engine", "parakeet")
             if config_stt == "faster-whisper":
                 actual_stt_engine = "fwhisper"
             elif config_stt == "mlx-whisper":
@@ -1115,12 +1172,21 @@ class RecordingOrchestrator:
             elif config_stt == "vosk":
                 actual_stt_engine = "vosk"
             else:
+                # parakeet and others use their config name directly
                 actual_stt_engine = config_stt
 
         # get specific model name for display
         stt_display = ""
         if mode == "stt":
-            if actual_stt_engine == "fwhisper":
+            if actual_stt_engine == "parakeet":
+                model_name = self.config.get(
+                    "models",
+                    "parakeet_model_name",
+                    "mlx-community/parakeet-tdt-0.6b-v3",
+                )
+                short_name = model_name.split("/")[-1] if "/" in model_name else model_name
+                stt_display = f"parakeet ({short_name})"
+            elif actual_stt_engine == "fwhisper":
                 model_name = self.config.get("models", "stt_model_name", "large-v3")
                 stt_display = f"faster-whisper ({model_name})"
             elif actual_stt_engine == "mlx":
@@ -1302,7 +1368,7 @@ def record(
     stt: str | None = typer.Option(
         None,
         "--stt",
-        help="stt engine: fwhisper, mlx, vosk, or whispercpp (defaults to config)",
+        help="stt engine: parakeet, fwhisper, mlx, vosk, or whispercpp",
     ),
     llm: str | None = typer.Option(
         None,
@@ -1339,6 +1405,11 @@ def record(
         None,
         "--flac-compression",
         help="flac compression level (0-8), higher = smaller file",
+    ),
+    no_tui: bool = typer.Option(
+        False,
+        "--no-tui",
+        help="disable TUI, use classic output",
     ),
 ) -> None:
     """start recording a meeting with optional scheduled stop"""
@@ -1430,6 +1501,24 @@ def record(
     # load config
     config = Config()
 
+    # launch TUI unless --no-tui
+    if not no_tui and not os.environ.get("MEETCAP_NO_TUI") and sys.stdout.isatty():
+        _launch_tui(
+            initial_screen="record",
+            record_args={
+                "device": device,
+                "out": out,
+                "rate": rate,
+                "channels": channels,
+                "stt": stt,
+                "llm": llm,
+                "auto_stop": auto_stop,
+                "audio_format": audio_format_lower,
+                "opus_bitrate": opus_bitrate,
+            },
+        )
+        return
+
     # run orchestrator
     orchestrator = RecordingOrchestrator(config)
     try:
@@ -1461,7 +1550,7 @@ def summarize(
     stt: str | None = typer.Option(
         None,
         "--stt",
-        help="stt engine: fwhisper, mlx, vosk, or whispercpp (defaults to config)",
+        help="stt engine: parakeet, fwhisper, mlx, vosk, or whispercpp",
     ),
     llm: str | None = typer.Option(
         None,
@@ -1483,6 +1572,11 @@ def summarize(
         None,
         "--log-file",
         help="path to log file",
+    ),
+    no_tui: bool = typer.Option(
+        False,
+        "--no-tui",
+        help="disable TUI, use classic output",
     ),
 ) -> None:
     """process an existing audio file (transcribe and summarize)"""
@@ -1514,6 +1608,11 @@ def summarize(
         output_dir = audio_path.parent
 
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # launch TUI unless --no-tui
+    if not no_tui and not os.environ.get("MEETCAP_NO_TUI") and sys.stdout.isatty():
+        _launch_tui(initial_screen="process", process_file=audio_path)
+        return
 
     # show processing banner
     console.print(
@@ -1562,7 +1661,7 @@ def reprocess(
     stt: str | None = typer.Option(
         None,
         "--stt",
-        help="stt engine override: 'fwhisper', 'mlx', 'vosk', or 'whisper.cpp'",
+        help="stt engine override: 'parakeet', 'fwhisper', 'mlx', 'vosk', or 'whisper.cpp'",
     ),
     llm: str | None = typer.Option(
         None,
@@ -1574,6 +1673,11 @@ def reprocess(
         "--yes",
         "-y",
         help="skip confirmation prompt",
+    ),
+    no_tui: bool = typer.Option(
+        False,
+        "--no-tui",
+        help="disable TUI, use classic output",
     ),
 ) -> None:
     """reprocess a recording with different models"""
@@ -1587,9 +1691,9 @@ def reprocess(
         raise typer.Exit(1)
 
     # validate stt engine if provided
-    if stt and stt not in ["fwhisper", "mlx", "vosk", "whisper.cpp"]:
+    if stt and stt not in ["parakeet", "fwhisper", "mlx", "vosk", "whisper.cpp"]:
         console.print(f"[red]error: invalid stt engine '{stt}'[/red]")
-        console.print("[yellow]use --stt fwhisper, mlx, vosk, or whisper.cpp[/yellow]")
+        console.print("[yellow]use --stt parakeet, fwhisper, mlx, vosk, or whisper.cpp[/yellow]")
         raise typer.Exit(1)
 
     # resolve recording path
@@ -1602,6 +1706,19 @@ def reprocess(
         console.print("  • check configured output directory:")
         console.print(f"    {config.expand_path(config.get('paths', 'out_dir'))}")
         raise typer.Exit(1)
+
+    # launch TUI unless --no-tui
+    if not no_tui and not os.environ.get("MEETCAP_NO_TUI") and sys.stdout.isatty():
+        # find audio file in the recording directory
+        audio_file_path = None
+        for ext in [".opus", ".wav", ".flac"]:
+            audio_files = list(recording_dir.glob(f"*{ext}"))
+            if audio_files:
+                audio_file_path = audio_files[0]
+                break
+        if audio_file_path:
+            _launch_tui(initial_screen="process", process_file=audio_file_path)
+            return
 
     try:
         orchestrator._reprocess_recording(
@@ -1745,8 +1862,13 @@ def setup() -> None:
         )
         stt_engines = [
             {
+                "key": "parakeet",
+                "name": "Parakeet TDT (recommended — 16x faster)",
+                "default_model": "mlx-community/parakeet-tdt-0.6b-v3",
+            },
+            {
                 "key": "mlx",
-                "name": "MLX Whisper (recommended for Apple Silicon)",
+                "name": "MLX Whisper (Apple Silicon)",
                 "default_model": "mlx-community/whisper-large-v3-turbo",
             },
             {
@@ -1765,7 +1887,7 @@ def setup() -> None:
         for i, engine in enumerate(stt_engines, 1):
             console.print(f"  {i}. [bold]{engine['name']}[/bold]")
 
-        engine_choice = typer.prompt("\nselect engine (1-3)", default="1")
+        engine_choice = typer.prompt("\nselect engine (1-4)", default="1")
         try:
             engine_idx = int(engine_choice) - 1
             if 0 <= engine_idx < len(stt_engines):
@@ -1800,7 +1922,17 @@ def setup() -> None:
 
     console.print(f"\n[cyan]selected engine: {selected_engine['name']}[/cyan]")
 
-    if selected_engine["key"] == "vosk":
+    if selected_engine["key"] == "parakeet":
+        # parakeet downloads model on first use from HuggingFace
+        console.print("[cyan]parakeet model will be downloaded on first use (~2.5 GB)[/cyan]")
+        console.print("[green]✓[/green] parakeet engine selected")
+
+        # update config
+        config.config["models"]["stt_engine"] = "parakeet"
+        config.config["models"]["parakeet_model_name"] = selected_engine["default_model"]
+        config.save()
+
+    elif selected_engine["key"] == "vosk":
         # vosk models
         vosk_models = [
             {
@@ -2007,8 +2139,54 @@ def setup() -> None:
         console.print(f"[yellow]⚠[/yellow] could not create directory: {e}")
         console.print(f"[yellow]keeping current directory: {current_out_dir}[/yellow]")
 
-    # step 6: select and download llm model
-    console.print("\n[bold]step 6: select llm (summarization) model[/bold]")
+    # step 6: download diarization models
+    console.print("\n[bold]step 6: download speaker diarization models[/bold]")
+    console.print("[cyan]sherpa-onnx diarization requires two small models (~43 MB total)[/cyan]")
+
+    seg_model_dir = models_dir / "sherpa-onnx-pyannote-segmentation-3-0"
+    seg_model_path = seg_model_dir / "model.onnx"
+    emb_model_path = models_dir / "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
+
+    if seg_model_path.exists() and emb_model_path.exists():
+        console.print("[green]✓[/green] diarization models already downloaded")
+    else:
+        download_diar = typer.confirm("download diarization models?", default=True)
+        if download_diar:
+            import tarfile
+
+            # download segmentation model
+            if not seg_model_path.exists():
+                console.print("[cyan]downloading segmentation model (~5 MB)...[/cyan]")
+                seg_url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
+                seg_archive = models_dir / "sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
+                try:
+                    urllib.request.urlretrieve(seg_url, seg_archive)
+                    with tarfile.open(seg_archive, "r:bz2") as tar:
+                        tar.extractall(path=models_dir)
+                    seg_archive.unlink()
+                    console.print("[green]✓[/green] segmentation model ready")
+                except Exception as e:
+                    console.print(f"[red]✗[/red] segmentation model download failed: {e}")
+
+            # download embedding model
+            if not emb_model_path.exists():
+                console.print("[cyan]downloading embedding model (~38 MB)...[/cyan]")
+                emb_url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
+                try:
+                    urllib.request.urlretrieve(emb_url, emb_model_path)
+                    console.print("[green]✓[/green] embedding model ready")
+                except Exception as e:
+                    console.print(f"[red]✗[/red] embedding model download failed: {e}")
+        else:
+            console.print("[yellow]⚠[/yellow] diarization models not downloaded")
+            console.print("[yellow]speaker diarization will not be available[/yellow]")
+
+    config.config["models"]["enable_speaker_diarization"] = True
+    config.config["models"]["diarization_backend"] = "sherpa"
+    config.save()
+
+    # step 7: select and download llm model
+    console.print("\n[bold]step 7: select llm (summarization) model[/bold]")
 
     llm_models = [
         {
@@ -2188,6 +2366,7 @@ def verify() -> None:
 
 @app.callback(invoke_without_command=True)
 def main(
+    ctx: typer.Context,
     version: bool = typer.Option(
         False,
         "--version",
@@ -2199,6 +2378,31 @@ def main(
     if version:
         console.print(f"meetcap v{__version__}")
         raise typer.Exit()
+    # if no subcommand, launch TUI
+    if ctx.invoked_subcommand is None:
+        _launch_tui()
+
+
+def _launch_tui(
+    initial_screen: str = "home",
+    record_args: dict | None = None,
+    process_file: "Path | None" = None,
+) -> None:
+    """launch the textual TUI application."""
+    if not sys.stdout.isatty() or os.environ.get("MEETCAP_NO_TUI"):
+        return
+    try:  # pragma: no cover
+        from meetcap.tui.app import MeetcapApp
+
+        tui = MeetcapApp(
+            initial_screen=initial_screen,
+            record_args=record_args,
+            process_file=process_file,
+        )
+        tui.run()
+        raise typer.Exit()
+    except ImportError:  # pragma: no cover
+        console.print("[yellow]TUI not available. Install with: pip install meetcap[tui][/yellow]")
 
 
 if __name__ == "__main__":

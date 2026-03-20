@@ -1,0 +1,51 @@
+#setup-container {
+    layout: vertical;
+    padding: 1 2;
+    align: center middle;
+}
+
+#setup-step-label {
+    text-align: center;
+    padding: 0 0 1 0;
+    color: $secondary;
+}
+
+.setup-step {
+    height: auto;
+    padding: 1;
+    margin: 1 0;
+    background: $panel;
+    border: tall $primary;
+}
+
+.setup-step Static {
+    padding: 0 0 1 0;
+}
+
+.setup-step Label {
+    padding: 0 1;
+}
+
+.setup-step Select {
+    margin: 0 1;
+}
+
+.setup-step Input {
+    margin: 0 1;
+}
+
+.setup-step ProgressBar {
+    margin: 0 1;
+}
+
+#setup-nav {
+    layout: horizontal;
+    height: auto;
+    align: center middle;
+    margin: 1 0;
+}
+
+#setup-nav Button {
+    margin: 0 1;
+    min-width: 12;
+}

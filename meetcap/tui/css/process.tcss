@@ -1,0 +1,73 @@
+#process-container {
+    layout: vertical;
+    padding: 1 2;
+    overflow-y: auto;
+}
+
+#pipeline-progress {
+    height: auto;
+    margin: 1 0;
+    padding: 1;
+    background: $panel;
+    border: tall $primary;
+}
+
+#pipeline-stages {
+    height: auto;
+}
+
+.stage-widget {
+    height: auto;
+    padding: 0 1;
+    margin: 0 0 1 0;
+}
+
+.stage-widget ProgressBar {
+    width: 100%;
+    margin: 0 1;
+}
+
+#details-title, #output-title {
+    text-style: bold;
+    color: $secondary;
+    padding: 1 0 0 0;
+}
+
+#process-audio-info, #process-detail-info {
+    padding: 0 1;
+}
+
+#process-log {
+    height: 1fr;
+    min-height: 4;
+    margin: 0 0 1 0;
+    border: round $primary;
+}
+
+#results-title {
+    text-style: bold;
+    color: $success;
+    padding: 1 0 0 0;
+    text-align: center;
+}
+
+#transcript-title, #summary-title {
+    text-style: bold;
+    color: $secondary;
+    padding: 1 0 0 0;
+}
+
+#result-transcript, #result-summary {
+    height: auto;
+    max-height: 20;
+    margin: 0 0 1 0;
+    padding: 1;
+    background: $panel;
+    border: tall $primary;
+    overflow-y: auto;
+}
+
+#btn-done {
+    margin: 1 2;
+    width: 100%;
+}

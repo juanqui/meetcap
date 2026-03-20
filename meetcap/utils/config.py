@@ -46,15 +46,19 @@ class Config:
             "prefix": "<ctrl>+a",  # prefix key for timer operations
         },
         "models": {
-            "stt_engine": "faster-whisper",  # stt engine: faster-whisper, mlx-whisper, or vosk
+            "stt_engine": "parakeet",  # stt engine: parakeet, faster-whisper, mlx-whisper, vosk, or whispercpp
             "stt_model_name": "large-v3",  # whisper model name for auto-download
             "stt_model_path": "~/.meetcap/models/whisper-large-v3",  # will be created automatically
             "mlx_stt_model_name": "mlx-community/whisper-large-v3-turbo",  # mlx whisper model
             "mlx_stt_model_path": "~/.meetcap/models/mlx-whisper",  # mlx models directory
+            "parakeet_model_name": "mlx-community/parakeet-tdt-0.6b-v3",  # parakeet model
             "vosk_model_name": "vosk-model-en-us-0.22",  # vosk model name
             "vosk_model_path": "~/.meetcap/models/vosk/vosk-model-en-us-0.22",  # vosk model directory
             "vosk_spk_model_path": "~/.meetcap/models/vosk/vosk-model-spk-0.4",  # speaker model directory
-            "enable_speaker_diarization": False,  # enable speaker identification with vosk
+            "enable_speaker_diarization": True,  # enable speaker identification (now default)
+            "diarization_backend": "sherpa",  # diarization backend: sherpa or vosk
+            "sherpa_num_speakers": -1,  # expected speaker count (-1 for auto)
+            "sherpa_cluster_threshold": 0.85,  # clustering threshold (0.0-1.0)
             "llm_model_name": "mlx-community/Qwen3.5-4B-MLX-4bit",  # mlx llm model repo id
         },
         "paths": {
@@ -140,6 +144,10 @@ class Config:
             "MEETCAP_VOSK_SPK_MODEL": ("models", "vosk_spk_model_path"),
             "MEETCAP_ENABLE_DIARIZATION": ("models", "enable_speaker_diarization", bool),
             "MEETCAP_MLX_STT_MODEL": ("models", "mlx_stt_model_name"),
+            "MEETCAP_PARAKEET_MODEL": ("models", "parakeet_model_name"),
+            "MEETCAP_DIARIZATION_BACKEND": ("models", "diarization_backend"),
+            "MEETCAP_SHERPA_NUM_SPEAKERS": ("models", "sherpa_num_speakers", int),
+            "MEETCAP_SHERPA_THRESHOLD": ("models", "sherpa_cluster_threshold", float),
             "MEETCAP_LLM_MODEL": ("models", "llm_model_name"),
             "MEETCAP_OUT_DIR": ("paths", "out_dir"),
             # memory management settings
@@ -287,6 +295,10 @@ class Config:
             self.save()
             console.print(f"[green]✓[/green] created default config: {self.config_path}")
             console.print("[yellow]edit this file to customize your settings[/yellow]")
+
+    def is_configured(self) -> bool:
+        """check if meetcap has been configured (setup wizard completed)."""
+        return self.config_path.exists()
 
     def expand_path(self, path_str: str) -> Path:
         """

@@ -1,0 +1,39 @@
+#history-container {
+    layout: vertical;
+    padding: 1 2;
+}
+
+#history-controls {
+    layout: horizontal;
+    height: auto;
+    margin: 0 0 1 0;
+}
+
+#history-search {
+    width: 2fr;
+    margin: 0 1 0 0;
+}
+
+#history-sort {
+    width: 1fr;
+}
+
+#history-table {
+    height: 1fr;
+    min-height: 6;
+}
+
+#preview-title {
+    text-style: bold;
+    color: $secondary;
+    padding: 1 0 0 0;
+}
+
+#summary-preview {
+    height: 1fr;
+    min-height: 6;
+    margin: 0 0 1 0;
+    padding: 1;
+    background: $panel;
+    border: tall $primary;
+}

@@ -1,0 +1,40 @@
+#record-container {
+    layout: vertical;
+    padding: 1 2;
+}
+
+#recording-digits {
+    width: 100%;
+    height: 5;
+    content-align: center middle;
+    margin: 1 0;
+}
+
+#audio-section-title, #timer-section-title, #log-section-title {
+    text-style: bold;
+    color: $secondary;
+    padding: 1 0 0 0;
+}
+
+#audio-device, #audio-format {
+    padding: 0 1;
+    color: $text;
+}
+
+#audio-level {
+    width: 100%;
+    height: 3;
+    margin: 0 1;
+}
+
+#timer-info {
+    padding: 0 1;
+    color: $text;
+}
+
+#recording-log {
+    height: 1fr;
+    min-height: 4;
+    margin: 0 0 1 0;
+    border: round $primary;
+}

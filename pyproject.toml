@@ -39,6 +39,7 @@ dependencies = [
     "mlx-vlm>=0.4.0,<1.0",
     "torchvision>=0.20.0",  # required by mlx-vlm processor for Qwen3.5
     "psutil>=6.1.0,<7.0",
+    "textual>=8.0.0,<9.0",
 ]
 
 [project.scripts]
@@ -54,7 +55,8 @@ dev = [
     "ruff>=0.12.8,<1.0",
     "mypy>=1.13.0,<2.0",
     "coverage[toml]>=7.6.9,<8.0",
-    "bump2version>=1.0.1,<2.0",
+    "bump-my-version>=0.30.0",
+    "pytest-textual-snapshot>=1.0.0",
 ]
 stt = [
     "faster-whisper>=1.2.0,<2.0",
@@ -72,6 +74,9 @@ diarization = [
     "librosa>=0.10.0,<1.0",
     "soundfile>=0.13.1,<1.0",
 ]
+parakeet-stt = [
+    "parakeet-mlx>=0.5.1",
+]
 
 [tool.hatch.version]
 path = "meetcap/__init__.py"
@@ -86,7 +91,8 @@ dev-dependencies = [
     "ruff>=0.12.8,<1.0",
     "mypy>=1.13.0,<2.0",
     "coverage[toml]>=7.6.9,<8.0",
-    "bump2version>=1.0.1,<2.0",
+    "bump-my-version>=0.30.0",
+    "pytest-textual-snapshot>=1.1.0",
 ]
 
 [tool.ruff]
@@ -139,3 +145,16 @@ addopts = [
     "--cov-report=xml",
     "--cov-fail-under=74",
 ]
+
+[tool.bumpversion]
+current_version = "2.0.0"
+commit = true
+tag = true
+tag_name = "v{new_version}"
+commit_args = ""
+message = "Bump version: {current_version} → {new_version}"
+
+[[tool.bumpversion.files]]
+filename = "meetcap/__init__.py"
+search = '__version__ = "{current_version}"'
+replace = '__version__ = "{new_version}"'
