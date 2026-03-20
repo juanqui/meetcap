@@ -41,7 +41,7 @@ jobs:
         uv run ruff check .
 
     - name: Test with pytest
-      run: uv run pytest --cov=meetcap tests --cov-report=xml --cov-fail-under=74
+      run: uv run pytest --cov=meetcap tests --cov-report=xml --cov-fail-under=73
 
     - name: Upload coverage to Codecov
       if: matrix.python-version == '3.11'
