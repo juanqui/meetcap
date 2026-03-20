@@ -658,8 +658,9 @@ class TestCLICommands:
                 patch("subprocess.run", return_value=Mock(returncode=0)),
                 patch("platform.processor", return_value="arm"),
                 patch(
-                    "typer.prompt", side_effect=["1", "1", "~/Recordings/meetcap", "1"]
-                ),  # User choices: engine, whisper model, output dir, llm model
+                    "typer.prompt",
+                    side_effect=["1", "~/Recordings/meetcap", "1", "1"],
+                ),  # User choices: engine(parakeet), output dir, llm model, extras
                 patch("typer.confirm", return_value=True),
                 patch("time.sleep"),  # Mock time.sleep
                 patch("threading.Event.wait", return_value=False),  # Mock hotkey timeout
@@ -677,6 +678,11 @@ class TestCLICommands:
                 patch("meetcap.cli.ensure_whisper_model", return_value="/models/whisper"),
                 patch("meetcap.cli.ensure_mlx_llm_model", return_value=True),
                 patch("meetcap.cli.ensure_mlx_whisper_model", return_value="/models/mlx-whisper"),
+                # Mock HuggingFace downloads (for parakeet + llm models)
+                patch("huggingface_hub.hf_hub_download", return_value="/mock/model"),
+                # Mock diarization model downloads
+                patch("urllib.request.urlretrieve"),
+                patch("tarfile.open", return_value=Mock(__enter__=Mock(), __exit__=Mock())),
                 # Mock hardware interactions
                 patch("meetcap.cli.list_audio_devices", return_value=[AudioDevice(0, "Mic")]),
                 patch(
