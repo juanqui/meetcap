@@ -1,9 +1,21 @@
 # Design Review & Improvement Plan
 
-- **Version**: 1.0
-- **Date**: 2026-03-19
-- **Status**: Draft
+- **Version**: 2.0
+- **Date**: 2026-03-20
+- **Status**: Implemented
 - **Type**: Comprehensive review spec
+
+### Implementation Notes (2026-03-20)
+
+All spec items implemented across 4 iterative review+fix+test cycles:
+- **Phase 1 (Security)**: MLX >= 0.29.4 pinned via mlx-vlm, upper bounds added, diarization group added
+- **Phase 2 (Thread Safety)**: RLock in HotkeyManager, context manager on AudioRecorder, double-checked locking on all services, standardized unload_model
+- **Phase 3 (Code Quality)**: _is_loaded flag, _cleanup_service helper, error logging, temp file cleanup, dead code fixes, config warnings
+- **Phase 4 (Docs)**: All docs updated to uv, zero hatch references remain
+- **Phase 5 (Polish)**: Config range validation deferred, parakeet-mlx evaluation deferred (both P3)
+- **Additional**: Full Hatch → uv migration completed (was listed as P3/future but done now)
+- **Deviations**: Used threading.RLock instead of Lock (reviewer caught deadlock). Added is_loaded() to DiarizationService (not in original spec).
+- **Test results**: 373 tests pass, 75.19% coverage, 5/5 stability runs clean, lint+format pass
 
 ---
 
