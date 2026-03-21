@@ -178,6 +178,25 @@ class TestRecordingOrchestrator:
 
                 mock_exit.assert_called_once_with(1)
 
+    def test_handle_terminate(self, orchestrator):
+        """test SIGTERM handler cleans up recorder"""
+        mock_recorder = Mock()
+        orchestrator.recorder = mock_recorder
+
+        with patch("sys.exit") as mock_exit:
+            orchestrator._handle_terminate(signal.SIGTERM, None)
+
+            mock_recorder.cleanup.assert_called_once()
+            mock_exit.assert_called_once_with(0)
+
+    def test_handle_terminate_no_recorder(self, orchestrator):
+        """test SIGTERM handler when no recorder exists"""
+        orchestrator.recorder = None
+
+        with patch("sys.exit") as mock_exit:
+            orchestrator._handle_terminate(signal.SIGTERM, None)
+            mock_exit.assert_called_once_with(0)
+
     def test_process_recording_with_transcription(self, orchestrator, temp_dir):
         """test processing recording with transcription"""
         # Create a recording directory structure

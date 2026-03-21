@@ -525,6 +525,129 @@ class TestAudioRecorderContextManager:
         mock_process.stdin.write.assert_called_with(b"q")
 
 
+class TestProcessCleanup:
+    """test ffmpeg process cleanup safety nets"""
+
+    @pytest.fixture
+    def recorder(self, temp_dir):
+        """create a recorder instance with temp directory"""
+        return AudioRecorder(output_dir=temp_dir)
+
+    def test_force_kill_process_running(self):
+        """test _force_kill_process kills a running process"""
+        mock_process = Mock()
+        mock_process.poll.return_value = None  # still running
+
+        AudioRecorder._force_kill_process(mock_process)
+
+        mock_process.kill.assert_called_once()
+        mock_process.wait.assert_called_once_with(timeout=2)
+
+    def test_force_kill_process_already_dead(self):
+        """test _force_kill_process is a no-op for already-dead process"""
+        mock_process = Mock()
+        mock_process.poll.return_value = 0  # already exited
+
+        AudioRecorder._force_kill_process(mock_process)
+
+        mock_process.kill.assert_not_called()
+
+    def test_force_kill_process_exception(self):
+        """test _force_kill_process swallows exceptions"""
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_process.kill.side_effect = OSError("no such process")
+
+        # should not raise
+        AudioRecorder._force_kill_process(mock_process)
+
+    def test_atexit_cleanup_with_active_session(self, recorder):
+        """test atexit handler kills active ffmpeg process"""
+        mock_process = Mock()
+        mock_process.poll.return_value = None  # still running
+
+        recorder.session = RecordingSession(
+            process=mock_process,
+            output_path=Path("/tmp/test.wav"),
+            start_time=0,
+            device_name="Test",
+            sample_rate=48000,
+            channels=2,
+        )
+
+        recorder._atexit_cleanup()
+
+        mock_process.kill.assert_called_once()
+        mock_process.wait.assert_called_once_with(timeout=2)
+
+    def test_atexit_cleanup_no_session(self, recorder):
+        """test atexit handler is a no-op with no session"""
+        recorder._atexit_cleanup()  # should not raise
+
+    def test_atexit_cleanup_process_already_dead(self, recorder):
+        """test atexit handler skips already-exited process"""
+        mock_process = Mock()
+        mock_process.poll.return_value = 0
+
+        recorder.session = RecordingSession(
+            process=mock_process,
+            output_path=Path("/tmp/test.wav"),
+            start_time=0,
+            device_name="Test",
+            sample_rate=48000,
+            channels=2,
+        )
+
+        recorder._atexit_cleanup()
+
+        mock_process.kill.assert_not_called()
+
+    def test_start_recording_error_kills_process(self, recorder):
+        """test that start_recording kills ffmpeg if an error occurs after Popen"""
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_process.stdin = Mock()
+        mock_process.stdout = Mock()
+        mock_process.stderr = Mock()
+        mock_process.stderr.read.return_value = b""
+
+        with patch("subprocess.Popen", return_value=mock_process):
+            with patch("time.sleep"):
+                # force an error after process starts by making console.print raise
+                with patch("meetcap.core.recorder.console.print", side_effect=RuntimeError("boom")):
+                    with pytest.raises(RuntimeError, match="failed to start recording"):
+                        recorder.start_recording(device_index=0)
+
+        # process must have been killed
+        mock_process.kill.assert_called_once()
+
+    def test_stop_recording_exception_force_kills(self, recorder, temp_dir):
+        """test that stop_recording force-kills process if graceful stop fails"""
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_process.stdin = Mock()
+        # stdin.write raises, then wait also raises to hit the outer except
+        mock_process.stdin.write.side_effect = OSError("broken")
+        mock_process.stdin.close.side_effect = OSError("broken")
+        mock_process.wait.side_effect = Exception("wait failed")
+
+        recorder.session = RecordingSession(
+            process=mock_process,
+            output_path=Path(temp_dir / "test.wav"),
+            start_time=0,
+            device_name="Test",
+            sample_rate=48000,
+            channels=2,
+        )
+
+        result = recorder.stop_recording()
+
+        assert result is None
+        assert recorder.session is None
+        # force kill must have been called in the except handler
+        mock_process.kill.assert_called()
+
+
 class TestRecorderIntegration:
     """integration tests for recorder functionality"""
 
