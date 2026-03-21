@@ -325,8 +325,9 @@ class RecordingOrchestrator:
         self.hotkey_manager = HotkeyManager(self._stop_recording, self._timer_callback, prefix_key)
         hotkey_combo = self.config.get("hotkey", "stop")
 
-        # setup signal handler for Ctrl-C
+        # setup signal handlers for Ctrl-C and SIGTERM
         signal.signal(signal.SIGINT, self._handle_interrupt)
+        signal.signal(signal.SIGTERM, self._handle_terminate)
 
         try:
             # start recording
@@ -425,10 +426,14 @@ class RecordingOrchestrator:
         except Exception as e:
             ErrorHandler.handle_runtime_error(e)
         finally:
+            # CRITICAL: clean up ffmpeg subprocess before anything else
+            if self.recorder:
+                self.recorder.cleanup()
             if self.hotkey_manager:
                 self.hotkey_manager.stop()
-            # restore default signal handler
+            # restore default signal handlers
             signal.signal(signal.SIGINT, signal.default_int_handler)
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
 
     def _handle_interrupt(self, signum, frame) -> None:
         """handle Ctrl-C interrupt signal."""
@@ -467,6 +472,13 @@ class RecordingOrchestrator:
             else:
                 # if not recording and processing is done, exit
                 sys.exit(0)
+
+    def _handle_terminate(self, signum, frame) -> None:
+        """handle SIGTERM for graceful shutdown."""
+        logger.info("received SIGTERM, shutting down")
+        if self.recorder:
+            self.recorder.cleanup()
+        sys.exit(0)
 
     def _stop_recording(self) -> None:
         """callback for hotkey to stop recording."""

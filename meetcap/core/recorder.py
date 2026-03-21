@@ -1,5 +1,7 @@
 """audio recording via ffmpeg subprocess"""
 
+import atexit
+import logging
 import subprocess
 import threading
 import time
@@ -12,6 +14,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from meetcap.utils.config import AudioFormat
 
 console = Console()
+logger = logging.getLogger("meetcap")
 
 
 @dataclass
@@ -53,6 +56,28 @@ class AudioRecorder:
         self.channels = channels
         self.session: RecordingSession | None = None
         self._stop_event = threading.Event()
+        atexit.register(self._atexit_cleanup)
+
+    def _atexit_cleanup(self) -> None:
+        """safety net: kill any remaining ffmpeg process on interpreter exit."""
+        if self.session is not None:
+            try:
+                process = self.session.process
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=2)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _force_kill_process(process: subprocess.Popen) -> None:
+        """ensure an ffmpeg subprocess is dead. best-effort, never raises."""
+        try:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=2)
+        except Exception:
+            pass
 
     def __enter__(self):
         return self
@@ -291,6 +316,7 @@ class AudioRecorder:
             dual_input=False,
         )
 
+        process = None
         try:
             # start ffmpeg process
             process = subprocess.Popen(
@@ -352,6 +378,9 @@ class AudioRecorder:
             return output_path.parent
 
         except Exception as e:
+            # kill the ffmpeg process if it was started
+            if process is not None:
+                self._force_kill_process(process)
             self.session = None
             if output_path.exists():
                 output_path.unlink()
@@ -418,6 +447,7 @@ class AudioRecorder:
             mic_index=mic_index,
         )
 
+        process = None
         try:
             # start ffmpeg process
             process = subprocess.Popen(
@@ -468,6 +498,9 @@ class AudioRecorder:
             return output_path.parent
 
         except Exception as e:
+            # kill the ffmpeg process if it was started
+            if process is not None:
+                self._force_kill_process(process)
             self.session = None
             if output_path.exists():
                 output_path.unlink()
@@ -530,6 +563,9 @@ class AudioRecorder:
                 return None
 
         except Exception as e:
+            # last resort: ensure the process is dead even if graceful stop failed
+            self._force_kill_process(process)
+            logger.error(f"error stopping recording: {e}")
             console.print(f"[red]error stopping recording: {e}[/red]")
             return None
         finally:
