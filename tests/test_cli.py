@@ -197,7 +197,11 @@ class TestRecordingOrchestrator:
             orchestrator._handle_terminate(signal.SIGTERM, None)
             mock_exit.assert_called_once_with(0)
 
-    def test_process_recording_with_transcription(self, orchestrator, temp_dir):
+    @patch("meetcap.cli.preflight_memory_check", return_value=(True, ""))
+    @patch("meetcap.cli.check_memory_for_model", return_value=(True, 8000.0, 1500.0, ""))
+    def test_process_recording_with_transcription(
+        self, mock_mem_model, mock_mem_preflight, orchestrator, temp_dir
+    ):
         """test processing recording with transcription"""
         # Create a recording directory structure
         recording_dir = temp_dir / "test-temp"
@@ -225,7 +229,11 @@ class TestRecordingOrchestrator:
                 mock_service.transcribe.assert_called_once_with(audio_file)
                 mock_save.assert_called_once()
 
-    def test_process_recording_with_summarization(self, orchestrator, temp_dir):
+    @patch("meetcap.cli.preflight_memory_check", return_value=(True, ""))
+    @patch("meetcap.cli.check_memory_for_model", return_value=(True, 8000.0, 3200.0, ""))
+    def test_process_recording_with_summarization(
+        self, mock_mem_model, mock_mem_preflight, orchestrator, temp_dir
+    ):
         """test processing with both transcription and summarization"""
         # Create a recording directory structure
         recording_dir = temp_dir / "test-temp"

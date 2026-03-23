@@ -263,9 +263,12 @@ class TestLLMMemoryManagement:
 class TestMemoryLifecycle:
     """test complete memory lifecycle during processing."""
 
+    @patch("meetcap.cli.preflight_memory_check", return_value=(True, ""))
     @patch("meetcap.cli.RecordingOrchestrator._process_audio_to_transcript")
     @patch("meetcap.cli.RecordingOrchestrator._process_transcript_to_summary")
-    def test_orchestrator_memory_management(self, mock_summary, mock_transcript, config):
+    def test_orchestrator_memory_management(
+        self, mock_summary, mock_transcript, mock_preflight, config
+    ):
         """test orchestrator properly manages memory between STT and LLM."""
         from meetcap.cli import RecordingOrchestrator
 
@@ -303,9 +306,10 @@ class TestMemoryLifecycle:
             assert "before_llm" in orchestrator.memory_monitor.checkpoints
             assert "after_llm" in orchestrator.memory_monitor.checkpoints
 
+    @patch("meetcap.cli.check_memory_for_model", return_value=(True, 8000.0, 1500.0, ""))
     @patch("meetcap.services.transcription.FasterWhisperService.transcribe")
     @patch("meetcap.services.transcription.FasterWhisperService._load_model")
-    def test_stt_explicit_lifecycle(self, mock_load, mock_transcribe, config):
+    def test_stt_explicit_lifecycle(self, mock_load, mock_transcribe, mock_mem, config):
         """test STT service explicit load/unload lifecycle."""
         from meetcap.cli import RecordingOrchestrator
         from meetcap.services.transcription import TranscriptResult
