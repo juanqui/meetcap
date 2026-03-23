@@ -647,6 +647,15 @@ class MlxWhisperService(TranscriptionService):
         console.print("[dim]mlx-whisper model unloaded[/dim]")
 
 
+# parakeet TDT uses full self-attention with O(L^2) memory in sequence length.
+# on Apple Silicon, a single Metal buffer cannot exceed ~50% of total RAM
+# (MTLDevice.maxBufferLength). without chunking, this limits recordings to
+# ~10 min on 8 GB, ~15 min on 16 GB, ~21 min on 32 GB machines.
+# chunk_duration=300 (5 min) keeps the attention matrix under 1 GB on any device.
+PARAKEET_CHUNK_DURATION = 300.0  # seconds per chunk
+PARAKEET_OVERLAP_DURATION = 15.0  # overlap between chunks for seamless merging
+
+
 class ParakeetService(TranscriptionService):
     """transcription using Parakeet TDT via parakeet-mlx (Apple Silicon optimized)"""
 
@@ -697,7 +706,7 @@ class ParakeetService(TranscriptionService):
             console.print("[green]✓[/green] parakeet model ready")
 
     def transcribe(self, audio_path: Path) -> TranscriptResult:
-        """transcribe audio file using parakeet TDT."""
+        """transcribe audio file using parakeet TDT with automatic chunking."""
         if not audio_path.exists():
             raise FileNotFoundError(f"audio file not found: {audio_path}")
 
@@ -712,14 +721,23 @@ class ParakeetService(TranscriptionService):
             console=console,
             transient=True,
         ) as progress:
-            task = progress.add_task("transcribing audio...", total=None)
+            task = progress.add_task("transcribing audio...", total=100)
+
+            def chunk_progress(current: int, total: int) -> None:
+                pct = int(current / total * 100) if total > 0 else 0
+                progress.update(task, completed=pct, description=f"transcribing... {pct}%")
 
             try:
-                result = self.model.transcribe(str(audio_path))
-                progress.update(
-                    task,
-                    description="processing segments...",
+                # always use chunking to prevent Metal buffer overflow on long audio.
+                # parakeet TDT's full self-attention allocates O(L^2) memory;
+                # without chunking, >10-21 min recordings exceed maxBufferLength.
+                result = self.model.transcribe(
+                    str(audio_path),
+                    chunk_duration=PARAKEET_CHUNK_DURATION,
+                    overlap_duration=PARAKEET_OVERLAP_DURATION,
+                    chunk_callback=chunk_progress,
                 )
+                progress.update(task, completed=100, description="processing segments...")
 
                 segments = []
                 for i, sentence in enumerate(result.sentences):
@@ -780,7 +798,7 @@ class ParakeetService(TranscriptionService):
             try:
                 import mlx.core as mx
 
-                mx.metal.clear_cache()
+                mx.clear_cache()
             except (ImportError, AttributeError):
                 pass
             import gc
