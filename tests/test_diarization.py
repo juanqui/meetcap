@@ -9,6 +9,7 @@ from meetcap.services.diarization import (
     DiarizationSegment,
     DiarizationService,
     SherpaOnnxDiarizationService,
+    _merge_small_clusters,
     assign_speakers,
 )
 from meetcap.services.transcription import TranscriptSegment
@@ -74,7 +75,7 @@ class TestSherpaOnnxDiarizationService:
         )
 
         assert service.num_speakers == -1
-        assert service.threshold == 0.85
+        assert service.threshold == 0.90
         assert service.min_duration_on == 0.3
         assert service.min_duration_off == 0.5
 
@@ -555,3 +556,85 @@ class TestAssignSpeakers:
 
         assert speakers[0] == {"id": 0, "label": "Speaker 1"}
         assert speakers[1] == {"id": 1, "label": "Speaker 2"}
+
+
+class TestMergeSmallClusters:
+    """test post-clustering small-cluster merge"""
+
+    def test_no_merge_when_all_large(self):
+        """test no merge when all clusters are above threshold."""
+        segments = [
+            DiarizationSegment(start=0, end=5, speaker=0),
+            DiarizationSegment(start=5, end=10, speaker=0),
+            DiarizationSegment(start=10, end=15, speaker=0),
+            DiarizationSegment(start=15, end=20, speaker=1),
+            DiarizationSegment(start=20, end=25, speaker=1),
+            DiarizationSegment(start=25, end=30, speaker=1),
+        ]
+        result = _merge_small_clusters(segments, min_segments=3)
+        speakers = {s.speaker for s in result}
+        assert len(speakers) == 2
+
+    def test_merge_small_cluster_into_nearest(self):
+        """test that small clusters merge into the temporally nearest large cluster."""
+        segments = [
+            # speaker 0: 5 segments (large)
+            DiarizationSegment(start=0, end=5, speaker=0),
+            DiarizationSegment(start=10, end=15, speaker=0),
+            DiarizationSegment(start=20, end=25, speaker=0),
+            DiarizationSegment(start=30, end=35, speaker=0),
+            DiarizationSegment(start=40, end=45, speaker=0),
+            # speaker 1: 5 segments (large)
+            DiarizationSegment(start=5, end=10, speaker=1),
+            DiarizationSegment(start=15, end=20, speaker=1),
+            DiarizationSegment(start=25, end=30, speaker=1),
+            DiarizationSegment(start=35, end=40, speaker=1),
+            DiarizationSegment(start=45, end=50, speaker=1),
+            # speaker 2: 1 segment (small, should be merged)
+            DiarizationSegment(start=22, end=24, speaker=2),
+        ]
+        result = _merge_small_clusters(segments, min_segments=3)
+        speakers = {s.speaker for s in result}
+        assert len(speakers) == 2
+        # the small segment near t=23 should have been assigned to speaker 0 or 1
+        small_seg = [s for s in result if s.start == 22][0]
+        assert small_seg.speaker in (0, 1)
+
+    def test_no_merge_on_empty(self):
+        """test empty segment list."""
+        assert _merge_small_clusters([], min_segments=3) == []
+
+    def test_no_merge_when_all_small(self):
+        """test no merge when ALL clusters are small (don't destroy everything)."""
+        segments = [
+            DiarizationSegment(start=0, end=5, speaker=0),
+            DiarizationSegment(start=5, end=10, speaker=1),
+            DiarizationSegment(start=10, end=15, speaker=2),
+        ]
+        result = _merge_small_clusters(segments, min_segments=3)
+        # should not merge — all clusters are small, merging would be destructive
+        speakers = {s.speaker for s in result}
+        assert len(speakers) == 3
+
+    def test_simulated_long_interview_over_segmentation(self):
+        """test fixing a 2-person interview that was split into 6 speakers."""
+        segments = []
+        # speaker 0: 100 segments (real)
+        for i in range(100):
+            segments.append(DiarizationSegment(start=i * 30.0, end=i * 30.0 + 10, speaker=0))
+        # speaker 1: 90 segments (real)
+        for i in range(90):
+            segments.append(DiarizationSegment(start=i * 30.0 + 15, end=i * 30.0 + 25, speaker=1))
+        # spurious speakers: 1-2 segments each
+        segments.append(DiarizationSegment(start=300, end=305, speaker=2))
+        segments.append(DiarizationSegment(start=600, end=608, speaker=3))
+        segments.append(DiarizationSegment(start=1800, end=1804, speaker=4))
+        segments.append(DiarizationSegment(start=2700, end=2706, speaker=5))
+
+        segments.sort(key=lambda s: s.start)
+        total = len(segments)
+        min_segs = max(3, int(total * 0.05))
+
+        result = _merge_small_clusters(segments, min_segs)
+        speakers = {s.speaker for s in result}
+        assert len(speakers) == 2

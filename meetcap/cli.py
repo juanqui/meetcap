@@ -815,7 +815,7 @@ class RecordingOrchestrator:
                         models_dir / "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
                     )
                     num_speakers = self.config.get("models", "sherpa_num_speakers", -1)
-                    threshold = self.config.get("models", "sherpa_cluster_threshold", 0.85)
+                    threshold = self.config.get("models", "sherpa_cluster_threshold", 0.90)
 
                     diar_service = SherpaOnnxDiarizationService(
                         segmentation_model=seg_model,

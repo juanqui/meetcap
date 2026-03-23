@@ -371,7 +371,7 @@ class ProcessScreen(Screen):
             )
             threshold = float(
                 config.get(  # type: ignore[union-attr]
-                    "models", "sherpa_cluster_threshold", 0.85
+                    "models", "sherpa_cluster_threshold", 0.90
                 )
             )
 

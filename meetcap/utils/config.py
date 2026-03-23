@@ -58,7 +58,7 @@ class Config:
             "enable_speaker_diarization": True,  # enable speaker identification (now default)
             "diarization_backend": "sherpa",  # diarization backend: sherpa or vosk
             "sherpa_num_speakers": -1,  # expected speaker count (-1 for auto)
-            "sherpa_cluster_threshold": 0.85,  # clustering threshold (0.0-1.0)
+            "sherpa_cluster_threshold": 0.90,  # clustering threshold (higher = fewer speakers)
             "llm_model_name": "mlx-community/Qwen3.5-2B-OptiQ-4bit",  # mlx llm model repo id
         },
         "paths": {

@@ -1,6 +1,7 @@
 """speaker diarization service using sherpa-onnx"""
 
 import time
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -8,6 +9,21 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 console = Console()
+
+# sherpa-onnx FastClustering uses cosine distance between speaker embeddings.
+# higher threshold → fewer clusters (speakers); lower → more clusters.
+# 0.85 (old default) over-segments on real audio (5 speakers instead of 4).
+# 0.90 empirically gives the correct count on 4-speaker test data, and avoids
+# the severe over-segmentation the user saw on 2-person interviews.
+DEFAULT_CLUSTER_THRESHOLD = 0.90
+
+# minimum fraction of total segments a speaker must have to survive
+# post-clustering cleanup.  clusters below this fraction are merged into the
+# temporally nearest larger speaker, mimicking pyannote 3.1's min_cluster_size.
+# only activates on recordings with enough segments (≥30) to be meaningful.
+MIN_CLUSTER_FRACTION = 0.05  # 5% of total segments
+MIN_CLUSTER_FLOOR = 3  # absolute minimum (when fraction applies)
+MIN_TOTAL_SEGMENTS_FOR_MERGE = 30  # don't merge on very short audio
 
 
 @dataclass
@@ -47,7 +63,7 @@ class SherpaOnnxDiarizationService(DiarizationService):
         segmentation_model: str,
         embedding_model: str,
         num_speakers: int = -1,
-        threshold: float = 0.85,
+        threshold: float = DEFAULT_CLUSTER_THRESHOLD,
         min_duration_on: float = 0.3,
         min_duration_off: float = 0.5,
     ):
@@ -168,6 +184,13 @@ class SherpaOnnxDiarizationService(DiarizationService):
 
         segments = [DiarizationSegment(start=r.start, end=r.end, speaker=r.speaker) for r in result]
 
+        # post-clustering cleanup: merge small clusters into nearest large speaker.
+        # only when auto-detecting speakers (num_speakers=-1) and enough segments
+        # to make the heuristic meaningful.
+        if self.num_speakers < 0 and len(segments) >= MIN_TOTAL_SEGMENTS_FOR_MERGE:
+            min_segs = max(MIN_CLUSTER_FLOOR, int(len(segments) * MIN_CLUSTER_FRACTION))
+            segments = _merge_small_clusters(segments, min_segs)
+
         num_speakers = len({s.speaker for s in segments})
 
         console.print(
@@ -196,6 +219,68 @@ class SherpaOnnxDiarizationService(DiarizationService):
         except (ImportError, Exception):
             pass
         console.print("[dim]diarization models unloaded[/dim]")
+
+
+def _merge_small_clusters(
+    segments: list[DiarizationSegment],
+    min_segments: int,
+) -> list[DiarizationSegment]:
+    """
+    merge speaker clusters with fewer than min_segments into the nearest
+    large-cluster speaker by temporal proximity.
+
+    this mimics pyannote 3.1's min_cluster_size: spurious micro-clusters
+    caused by noise, voice variation, or embedding instability get absorbed
+    into the dominant speakers.
+
+    args:
+        segments: diarization segments from sherpa-onnx
+        min_segments: minimum segments a speaker must have to survive
+
+    returns:
+        segments with small-cluster speakers reassigned
+    """
+    if not segments:
+        return segments
+
+    counts = Counter(s.speaker for s in segments)
+    large_speakers = {spk for spk, cnt in counts.items() if cnt >= min_segments}
+
+    if not large_speakers or large_speakers == set(counts.keys()):
+        # no small clusters, or everything is small (don't merge away all speakers)
+        return segments
+
+    small_speakers = set(counts.keys()) - large_speakers
+    if not small_speakers:
+        return segments
+
+    merged = 0
+    for seg in segments:
+        if seg.speaker in small_speakers:
+            # find the nearest large-cluster segment by temporal midpoint distance
+            seg_mid = (seg.start + seg.end) / 2
+            best_speaker = None
+            best_dist = float("inf")
+            for other in segments:
+                if other.speaker in large_speakers:
+                    other_mid = (other.start + other.end) / 2
+                    dist = abs(seg_mid - other_mid)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_speaker = other.speaker
+            if best_speaker is not None:
+                seg.speaker = best_speaker
+                merged += 1
+
+    if merged > 0:
+        final_count = len({s.speaker for s in segments})
+        console.print(
+            f"[dim]merged {merged} segment(s) from "
+            f"{len(small_speakers)} small cluster(s) "
+            f"→ {final_count} speakers[/dim]"
+        )
+
+    return segments
 
 
 def assign_speakers(
