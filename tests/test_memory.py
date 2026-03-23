@@ -21,6 +21,7 @@ from meetcap.utils.memory import (
     get_memory_usage,
     get_total_memory_mb,
     preflight_memory_check,
+    safe_model_loading,
 )
 
 
@@ -533,3 +534,61 @@ class TestProcessScreenReprocessMode:
         screen = ProcessScreen(audio_path=audio_file, mode="summary")
         assert screen._mode == "summary"
         assert screen._audio_path == audio_file
+
+    def test_get_stt_model_name(self):
+        """test _get_stt_model_name helper for various engines."""
+        from meetcap.tui.screens.process import ProcessScreen
+
+        config = Mock()
+        config.get.return_value = "test-model"
+
+        name = ProcessScreen._get_stt_model_name(config, "parakeet")
+        assert name == "test-model"
+
+        name = ProcessScreen._get_stt_model_name(config, "mlx-whisper")
+        assert name == "test-model"
+
+        name = ProcessScreen._get_stt_model_name(config, "faster-whisper")
+        assert name == "test-model"
+
+        name = ProcessScreen._get_stt_model_name(config, "whisper.cpp")
+        assert name == "whisper.cpp"
+
+
+class TestSafeModelLoading:
+    """test safe_model_loading wrapper."""
+
+    def test_successful_load(self):
+        """test safe_model_loading with successful load function."""
+        load_func = Mock()
+        safe_model_loading(load_func, "test-model")
+        load_func.assert_called_once()
+
+    def test_memory_error_raises(self):
+        """test safe_model_loading catches memory-related errors."""
+        import pytest
+
+        from meetcap.utils.memory import MemoryError
+
+        load_func = Mock(side_effect=Exception("memory allocation failed"))
+        with pytest.raises(MemoryError, match="insufficient memory"):
+            safe_model_loading(load_func, "test-model")
+
+    def test_non_memory_error_reraises(self):
+        """test safe_model_loading re-raises non-memory errors."""
+        import pytest
+
+        load_func = Mock(side_effect=ValueError("bad value"))
+        with pytest.raises(ValueError, match="bad value"):
+            safe_model_loading(load_func, "test-model")
+
+
+class TestMemoryReportEdgeCases:
+    """test memory report edge cases for coverage."""
+
+    def test_empty_report(self):
+        """test report with no checkpoints does nothing."""
+        monitor = MemoryMonitor()
+        # should not raise
+        monitor.report()
+        monitor.report(detailed=True)
