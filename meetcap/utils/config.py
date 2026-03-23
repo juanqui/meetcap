@@ -59,7 +59,7 @@ class Config:
             "diarization_backend": "sherpa",  # diarization backend: sherpa or vosk
             "sherpa_num_speakers": -1,  # expected speaker count (-1 for auto)
             "sherpa_cluster_threshold": 0.85,  # clustering threshold (0.0-1.0)
-            "llm_model_name": "mlx-community/Qwen3.5-4B-MLX-4bit",  # mlx llm model repo id
+            "llm_model_name": "mlx-community/Qwen3.5-2B-OptiQ-4bit",  # mlx llm model repo id
         },
         "paths": {
             "out_dir": "~/Recordings/meetcap",
@@ -215,14 +215,14 @@ class Config:
             console.print("[dim]migrating from GGUF to MLX llm model...[/dim]")
             del self.config["models"]["llm_gguf_path"]
             self.config.setdefault("models", {}).setdefault(
-                "llm_model_name", "mlx-community/Qwen3.5-4B-MLX-4bit"
+                "llm_model_name", "mlx-community/Qwen3.5-2B-OptiQ-4bit"
             )
             needs_migration = True
 
         # check for llm_model_name ending in .gguf
         if models.get("llm_model_name", "").endswith(".gguf"):
             console.print("[dim]migrating .gguf model name to MLX model...[/dim]")
-            self.config["models"]["llm_model_name"] = "mlx-community/Qwen3.5-4B-MLX-4bit"
+            self.config["models"]["llm_model_name"] = "mlx-community/Qwen3.5-2B-OptiQ-4bit"
             needs_migration = True
 
         if needs_migration:

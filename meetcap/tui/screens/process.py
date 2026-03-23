@@ -126,7 +126,7 @@ class ProcessScreen(Screen):
             llm_model = config.get(
                 "models",
                 "llm_model_name",
-                "mlx-community/Qwen3.5-4B-MLX-4bit",
+                "mlx-community/Qwen3.5-2B-OptiQ-4bit",
             )
 
             if self._mode == "summary":
@@ -412,7 +412,7 @@ class ProcessScreen(Screen):
         model_name = config.get(  # type: ignore[union-attr]
             "models",
             "llm_model_name",
-            "mlx-community/Qwen3.5-4B-MLX-4bit",
+            "mlx-community/Qwen3.5-2B-OptiQ-4bit",
         )
         temperature = float(
             config.get("llm", "temperature", 0.4)  # type: ignore[union-attr]

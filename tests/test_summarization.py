@@ -17,12 +17,12 @@ class TestSummarizationService:
     def test_init_stores_model_name(self):
         """test initialization stores model_name"""
         service = SummarizationService(
-            model_name="mlx-community/Qwen3.5-4B-MLX-4bit",
+            model_name="mlx-community/Qwen3.5-2B-OptiQ-4bit",
             temperature=0.3,
             max_tokens=2048,
         )
 
-        assert service.model_name == "mlx-community/Qwen3.5-4B-MLX-4bit"
+        assert service.model_name == "mlx-community/Qwen3.5-2B-OptiQ-4bit"
         assert service.temperature == 0.3
         assert service.max_tokens == 2048
         assert service.model is None  # lazy loading
@@ -33,7 +33,7 @@ class TestSummarizationService:
         """test initialization with default values"""
         service = SummarizationService()
 
-        assert service.model_name == "mlx-community/Qwen3.5-4B-MLX-4bit"
+        assert service.model_name == "mlx-community/Qwen3.5-2B-OptiQ-4bit"
         assert service.temperature == 0.4
         assert service.max_tokens == 4096
         assert service.model is None
@@ -60,35 +60,32 @@ class TestSummarizationService:
     def test_load_model_only_once(self, mock_console):
         """test model is only loaded once"""
         mock_model = Mock()
-        mock_processor = Mock()
+        mock_tokenizer = Mock()
 
-        with patch("mlx_vlm.load", return_value=(mock_model, mock_processor)) as mock_load:
-            with patch("mlx_vlm.utils.load_config", return_value=Mock()):
-                service = SummarizationService()
-                service._load_model()
-                service._load_model()  # second call
+        with patch("mlx_lm.load", return_value=(mock_model, mock_tokenizer)) as mock_load:
+            service = SummarizationService()
+            service._load_model()
+            service._load_model()  # second call
 
-                # should only be called once
-                mock_load.assert_called_once()
+            # should only be called once
+            mock_load.assert_called_once()
 
     def test_load_model_import_error(self):
-        """test handling of missing mlx-vlm"""
+        """test handling of missing mlx-lm and mlx-vlm"""
         service = SummarizationService()
 
-        # mock the import to fail
+        # mock both imports to fail
         import builtins
 
         original_import = builtins.__import__
 
         def mock_import(name, *args, **kwargs):
-            if name == "mlx_vlm":
-                raise ImportError("No module named 'mlx_vlm'")
-            if name == "mlx_vlm.utils":
-                raise ImportError("No module named 'mlx_vlm'")
+            if name in ("mlx_lm", "mlx_vlm", "mlx_vlm.utils"):
+                raise ImportError(f"No module named '{name}'")
             return original_import(name, *args, **kwargs)
 
         with patch("builtins.__import__", side_effect=mock_import):
-            with pytest.raises(ImportError, match="mlx-vlm not installed"):
+            with pytest.raises(ImportError, match="neither mlx-lm nor mlx-vlm"):
                 service._load_model()
 
     @patch("meetcap.services.summarization.console")

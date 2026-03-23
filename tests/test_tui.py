@@ -613,8 +613,8 @@ class TestSettingsDropdownOptions:
         from meetcap.tui.screens.settings import LLM_MODELS
 
         model_repos = [repo for _, repo in LLM_MODELS]
-        assert "mlx-community/Qwen3.5-4B-MLX-4bit" in model_repos
-        assert "mlx-community/Qwen3.5-9B-MLX-4bit" in model_repos
+        assert "mlx-community/Qwen3.5-2B-OptiQ-4bit" in model_repos
+        assert "mlx-community/Qwen3.5-9B-OptiQ-4bit" in model_repos
 
     def test_audio_formats_match_config(self) -> None:
         """audio format options must match AudioFormat enum."""
@@ -657,9 +657,9 @@ class TestSettingsDropdownOptions:
             "setting-temperature",
         ]
         for field_id in must_be_select:
-            assert field_id not in input_ids, (
-                f"'{field_id}' is a free-text Input but should be a Select dropdown"
-            )
+            assert (
+                field_id not in input_ids
+            ), f"'{field_id}' is a free-text Input but should be a Select dropdown"
 
 
 class TestSetupScreenCompose:

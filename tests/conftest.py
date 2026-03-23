@@ -71,7 +71,7 @@ def mock_config_data():
         "models": {
             "stt_model": "large-v3",
             "stt_model_path": "~/.meetcap/models/whisper",
-            "llm_model_name": "mlx-community/Qwen3.5-4B-MLX-4bit",
+            "llm_model_name": "mlx-community/Qwen3.5-2B-OptiQ-4bit",
         },
         "paths": {
             "out_dir": "~/Recordings",

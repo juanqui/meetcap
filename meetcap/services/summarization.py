@@ -16,11 +16,11 @@ CHUNK_SIZE = 400_000
 
 
 class SummarizationService:
-    """generate meeting summaries using local llm via mlx-vlm"""
+    """generate meeting summaries using local llm via mlx-lm (or mlx-vlm fallback)"""
 
     def __init__(
         self,
-        model_name: str = "mlx-community/Qwen3.5-4B-MLX-4bit",
+        model_name: str = "mlx-community/Qwen3.5-2B-OptiQ-4bit",
         temperature: float = 0.4,
         max_tokens: int = 4096,
         enable_thinking: bool = False,
@@ -44,6 +44,7 @@ class SummarizationService:
         self.model = None
         self.processor = None
         self.model_config = None
+        self._backend = None  # "mlx-lm" or "mlx-vlm"
         self._load_lock = threading.Lock()
 
     def _load_model(self) -> None:
@@ -54,18 +55,30 @@ class SummarizationService:
             if self.model is not None:
                 return  # another thread loaded while we waited
 
+            console.print(f"[cyan]loading llm model {self.model_name}...[/cyan]")
+
+            # prefer mlx-lm (works with OptiQ and standard text models)
+            try:
+                from mlx_lm import load
+
+                self.model, self.processor = load(self.model_name)
+                self._backend = "mlx-lm"
+                return
+            except (ImportError, Exception):
+                pass
+
+            # fall back to mlx-vlm (for vision-language models)
             try:
                 from mlx_vlm import load
                 from mlx_vlm.utils import load_config
+
+                self.model_config = load_config(self.model_name)
+                self.model, self.processor = load(self.model_name)
+                self._backend = "mlx-vlm"
             except ImportError as e:
                 raise ImportError(
-                    "mlx-vlm not installed. install with: pip install 'mlx-vlm[torch]>=0.4.0'"
+                    "neither mlx-lm nor mlx-vlm installed. install with: pip install mlx-lm"
                 ) from e
-
-            console.print(f"[cyan]loading llm model {self.model_name}...[/cyan]")
-
-            self.model_config = load_config(self.model_name)
-            self.model, self.processor = load(self.model_name)
 
     def load_model(self) -> None:
         """explicitly load the llm model."""
@@ -299,11 +312,7 @@ class SummarizationService:
         returns:
             generated summary text
         """
-        from mlx_vlm import generate
-
-        # use the tokenizer's apply_chat_template — it properly handles
-        # system messages and the enable_thinking flag for Qwen3.5.
-        # mlx-vlm's apply_chat_template drops both of these.
+        # build chat messages and apply template via the tokenizer
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -315,35 +324,44 @@ class SummarizationService:
             enable_thinking=self.enable_thinking,
         )
 
-        # build generate kwargs
-        gen_kwargs = {
-            "max_tokens": self.max_tokens,
-            "temp": self.temperature,
-        }
+        if self._backend == "mlx-lm":
+            from mlx_lm import generate
 
-        # when thinking is enabled, use mlx-vlm's thinking budget control
-        # to cap the reasoning tokens and prevent over-thinking loops
-        if self.enable_thinking:
-            gen_kwargs["enable_thinking"] = True
-            gen_kwargs["thinking_budget"] = self.thinking_budget
-            gen_kwargs["thinking_start_token"] = "<think>"
-            gen_kwargs["thinking_end_token"] = "</think>"
-
-        # generate response
-        result = generate(
-            self.model,
-            self.processor,
-            prompt,
-            **gen_kwargs,
-        )
-
-        # extract text from result
-        if hasattr(result, "text"):
-            raw_output = result.text.strip()
-        elif isinstance(result, str):
-            raw_output = result.strip()
+            raw_output = generate(
+                self.model,
+                self.processor,
+                prompt=prompt,
+                max_tokens=self.max_tokens,
+                temp=self.temperature,
+            )
         else:
-            raw_output = str(result).strip()
+            from mlx_vlm import generate
+
+            gen_kwargs: dict = {
+                "max_tokens": self.max_tokens,
+                "temp": self.temperature,
+            }
+            if self.enable_thinking:
+                gen_kwargs["enable_thinking"] = True
+                gen_kwargs["thinking_budget"] = self.thinking_budget
+                gen_kwargs["thinking_start_token"] = "<think>"
+                gen_kwargs["thinking_end_token"] = "</think>"
+
+            result = generate(
+                self.model,
+                self.processor,
+                prompt,
+                **gen_kwargs,
+            )
+            # extract text from mlx-vlm result
+            if hasattr(result, "text"):
+                raw_output = result.text.strip()
+            elif isinstance(result, str):
+                raw_output = result.strip()
+            else:
+                raw_output = str(result).strip()
+
+        raw_output = raw_output.strip()
 
         # clean thinking tags if present (safety net for when thinking is enabled)
         if self.enable_thinking:

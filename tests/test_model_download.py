@@ -27,7 +27,7 @@ class TestVerifyFunctions:
     def test_verify_mlx_llm_model_not_arm(self, mock_console):
         """test verifying mlx llm model on non-ARM processor"""
         with patch("platform.processor", return_value="x86_64"):
-            result = verify_mlx_llm_model("mlx-community/Qwen3.5-4B-MLX-4bit")
+            result = verify_mlx_llm_model("mlx-community/Qwen3.5-2B-OptiQ-4bit")
             assert result is False
 
     @patch("meetcap.services.model_download.console")
@@ -35,7 +35,7 @@ class TestVerifyFunctions:
         """test verifying mlx llm model without mlx-vlm installed"""
         with patch("platform.processor", return_value="arm"):
             with patch("importlib.util.find_spec", return_value=None):
-                result = verify_mlx_llm_model("mlx-community/Qwen3.5-4B-MLX-4bit")
+                result = verify_mlx_llm_model("mlx-community/Qwen3.5-2B-OptiQ-4bit")
                 assert result is False
 
     @patch("meetcap.services.model_download.console")
@@ -47,7 +47,7 @@ class TestVerifyFunctions:
                     "huggingface_hub.try_to_load_from_cache",
                     return_value="/cached/config.json",
                 ):
-                    result = verify_mlx_llm_model("mlx-community/Qwen3.5-4B-MLX-4bit")
+                    result = verify_mlx_llm_model("mlx-community/Qwen3.5-2B-OptiQ-4bit")
                     assert result is True
 
     @patch("meetcap.services.model_download.console")
@@ -56,7 +56,7 @@ class TestVerifyFunctions:
         with patch("platform.processor", return_value="arm"):
             with patch("importlib.util.find_spec", return_value=Mock()):
                 with patch("huggingface_hub.try_to_load_from_cache", return_value=None):
-                    result = verify_mlx_llm_model("mlx-community/Qwen3.5-4B-MLX-4bit")
+                    result = verify_mlx_llm_model("mlx-community/Qwen3.5-2B-OptiQ-4bit")
                     assert result is False
 
     @patch("meetcap.services.model_download.console")
@@ -68,7 +68,7 @@ class TestVerifyFunctions:
                     "huggingface_hub.try_to_load_from_cache",
                     side_effect=Exception("cache error"),
                 ):
-                    result = verify_mlx_llm_model("mlx-community/Qwen3.5-4B-MLX-4bit")
+                    result = verify_mlx_llm_model("mlx-community/Qwen3.5-2B-OptiQ-4bit")
                     assert result is False
 
 
@@ -86,15 +86,15 @@ class TestEnsureFunctions:
     def test_ensure_mlx_llm_model_success(self, mock_console):
         """test successful mlx llm model download"""
         with patch("huggingface_hub.snapshot_download") as mock_download:
-            result = ensure_mlx_llm_model("mlx-community/Qwen3.5-4B-MLX-4bit")
+            result = ensure_mlx_llm_model("mlx-community/Qwen3.5-2B-OptiQ-4bit")
             assert result is True
-            mock_download.assert_called_once_with("mlx-community/Qwen3.5-4B-MLX-4bit")
+            mock_download.assert_called_once_with("mlx-community/Qwen3.5-2B-OptiQ-4bit")
 
     @patch("meetcap.services.model_download.console")
     def test_ensure_mlx_llm_model_failure(self, mock_console):
         """test failed mlx llm model download"""
         with patch("huggingface_hub.snapshot_download", side_effect=Exception("download failed")):
-            result = ensure_mlx_llm_model("mlx-community/Qwen3.5-4B-MLX-4bit")
+            result = ensure_mlx_llm_model("mlx-community/Qwen3.5-2B-OptiQ-4bit")
             assert result is False
 
     @patch("meetcap.services.model_download.console")
@@ -103,7 +103,7 @@ class TestEnsureFunctions:
         with patch("huggingface_hub.snapshot_download") as mock_download:
             result = ensure_mlx_llm_model()
             assert result is True
-            mock_download.assert_called_once_with("mlx-community/Qwen3.5-4B-MLX-4bit")
+            mock_download.assert_called_once_with("mlx-community/Qwen3.5-2B-OptiQ-4bit")
 
 
 class TestMlxWhisperFunctions:

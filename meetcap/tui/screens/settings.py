@@ -27,8 +27,9 @@ STT_ENGINES = [
 
 # mirrors cli.py step 6 llm model list
 LLM_MODELS = [
-    ("Qwen3.5-4B (~2.9 GB, default)", "mlx-community/Qwen3.5-4B-MLX-4bit"),
-    ("Qwen3.5-9B (~5.6 GB, higher quality)", "mlx-community/Qwen3.5-9B-MLX-4bit"),
+    ("Qwen3.5-2B OptiQ (~1.4 GB, default)", "mlx-community/Qwen3.5-2B-OptiQ-4bit"),
+    ("Qwen3.5-4B OptiQ (~2.8 GB, better quality)", "mlx-community/Qwen3.5-4B-OptiQ-4bit"),
+    ("Qwen3.5-9B OptiQ (~5.8 GB, highest quality)", "mlx-community/Qwen3.5-9B-OptiQ-4bit"),
 ]
 
 AUDIO_FORMATS = [
@@ -108,7 +109,7 @@ class SettingsScreen(Screen):
             yield Label("Model:")
             yield Select(
                 LLM_MODELS,
-                value="mlx-community/Qwen3.5-4B-MLX-4bit",
+                value="mlx-community/Qwen3.5-2B-OptiQ-4bit",
                 id="setting-llm-model",
                 allow_blank=False,
             )
@@ -193,7 +194,7 @@ class SettingsScreen(Screen):
             c.get("models", "stt_engine", "faster-whisper")
         )
         self.query_one("#setting-llm-model", Select).value = str(
-            c.get("models", "llm_model_name", "mlx-community/Qwen3.5-4B-MLX-4bit")
+            c.get("models", "llm_model_name", "mlx-community/Qwen3.5-2B-OptiQ-4bit")
         )
 
         # temperature

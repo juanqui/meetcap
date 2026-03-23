@@ -30,6 +30,7 @@ class RecordScreen(Screen):
         self._stop_requested = False
         self._timer_seconds: int = 0  # auto-stop timer (0 = disabled)
         self._timer_remaining: float = 0.0
+        self._last_timer_display: int = -1  # throttle label updates to 1/s
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -59,6 +60,25 @@ class RecordScreen(Screen):
 
     def on_mount(self) -> None:
         """start recording when screen mounts."""
+        # reset all state for fresh recording (supports consecutive recordings)
+        self._recording = False
+        self._recorder = None
+        self._recording_dir = None
+        self._start_time = 0.0
+        self._stop_requested = False
+        self._timer_seconds = 0
+        self._timer_remaining = 0.0
+        self._last_timer_display = -1
+
+        # reset UI elements
+        try:
+            self.query_one("#timer-info", Label).update("Auto-stop: disabled")
+            from meetcap.tui.widgets.recording_digits import RecordingDigits
+
+            self.query_one("#recording-digits", RecordingDigits).update_time(0.0)
+        except Exception:
+            pass
+
         self._log("Preparing to record...")
         self._start_recording_flow()
 
@@ -107,10 +127,7 @@ class RecordScreen(Screen):
             if auto_stop and auto_stop > 0:
                 self._timer_seconds = auto_stop * 60
                 self._timer_remaining = float(self._timer_seconds)
-                try:
-                    self.query_one("#timer-info", Label).update(f"Auto-stop: {auto_stop} min")
-                except Exception:
-                    pass
+                self._update_timer_label()
 
             self._log(f"Device: {device_name}")
             self._log(f"Format: {audio_format.value.upper()} @ {sample_rate}Hz")
@@ -183,6 +200,25 @@ class RecordScreen(Screen):
         """start the periodic timer update."""
         self.set_interval(1 / 10, self._update_display)
 
+    def _update_timer_label(self) -> None:
+        """update the #timer-info label with current remaining time."""
+        try:
+            label = self.query_one("#timer-info", Label)
+            if self._timer_seconds <= 0:
+                label.update("Auto-stop: disabled")
+                return
+
+            remaining = max(0, self._timer_remaining)
+            mins = int(remaining // 60)
+            secs = int(remaining % 60)
+
+            if remaining <= 60:
+                label.update(f"Auto-stop: {secs}s remaining")
+            else:
+                label.update(f"Auto-stop: {mins}:{secs:02d} remaining")
+        except Exception:
+            pass
+
     def _update_display(self) -> None:
         """update the timer display (called at 10fps)."""
         if not self._recording:
@@ -201,7 +237,15 @@ class RecordScreen(Screen):
         # check auto-stop timer
         if self._timer_seconds > 0:
             self._timer_remaining = self._timer_seconds - elapsed
+
+            # update countdown label once per second (avoid excessive redraws)
+            current_second = int(self._timer_remaining)
+            if current_second != self._last_timer_display:
+                self._last_timer_display = current_second
+                self._update_timer_label()
+
             if self._timer_remaining <= 0:
+                self._log("[yellow]Auto-stop timer reached[/yellow]")
                 self.action_stop_recording()
 
     def action_stop_recording(self) -> None:
@@ -268,22 +312,20 @@ class RecordScreen(Screen):
 
     def action_extend_timer(self) -> None:
         """extend auto-stop timer by 30 minutes."""
-        self._timer_seconds += 30 * 60
-        remaining_min = int(self._timer_remaining / 60) + 30
-        try:
-            self.query_one("#timer-info", Label).update(
-                f"Auto-stop: ~{remaining_min} min remaining"
-            )
-        except Exception:
-            pass
+        if self._timer_seconds <= 0:
+            # enable timer if it was disabled (start from current elapsed)
+            elapsed = time.time() - self._start_time if self._start_time else 0
+            self._timer_seconds = int(elapsed) + 30 * 60
+        else:
+            self._timer_seconds += 30 * 60
+        self._timer_remaining = self._timer_seconds - (time.time() - self._start_time)
+        self._update_timer_label()
         self._log("Timer extended by 30 minutes")
 
     def action_cancel_timer(self) -> None:
         """cancel auto-stop timer."""
         self._timer_seconds = 0
         self._timer_remaining = 0
-        try:
-            self.query_one("#timer-info", Label).update("Auto-stop: disabled")
-        except Exception:
-            pass
+        self._last_timer_display = -1
+        self._update_timer_label()
         self._log("Timer cancelled")

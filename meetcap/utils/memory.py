@@ -23,6 +23,12 @@ MODEL_MEMORY_ESTIMATES: dict[str, int] = {
     "vosk-small": 500,
     "vosk-standard": 1800,
     # LLM models (4-bit quantized sizes)
+    "qwen3.5-2b-optiq-4bit": 1600,
+    "mlx-community/qwen3.5-2b-optiq-4bit": 1600,
+    "qwen3.5-4b-optiq-4bit": 3200,
+    "mlx-community/qwen3.5-4b-optiq-4bit": 3200,
+    "qwen3.5-9b-optiq-4bit": 6000,
+    "mlx-community/qwen3.5-9b-optiq-4bit": 6000,
     "qwen3.5-4b-mlx-4bit": 3200,
     "mlx-community/qwen3.5-4b-mlx-4bit": 3200,
     "qwen3.5-9b-mlx-4bit": 6000,

@@ -203,7 +203,7 @@ def _check_llm(result: ReadinessResult, config: object) -> None:
     from meetcap.services.model_download import verify_mlx_llm_model
 
     model_name = config.get(  # type: ignore[union-attr]
-        "models", "llm_model_name", "mlx-community/Qwen3.5-4B-MLX-4bit"
+        "models", "llm_model_name", "mlx-community/Qwen3.5-2B-OptiQ-4bit"
     )
     if not verify_mlx_llm_model(model_name):
         result.issues.append(

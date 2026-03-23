@@ -266,7 +266,7 @@ class TestRecordingOrchestrator:
                             orchestrator._process_recording(
                                 recording_dir,
                                 stt_engine="fwhisper",
-                                llm_model="mlx-community/Qwen3.5-4B-MLX-4bit",
+                                llm_model="mlx-community/Qwen3.5-2B-OptiQ-4bit",
                                 seed=None,
                             )
 
@@ -375,7 +375,7 @@ class TestCLICommands:
             mock_config.expand_path.return_value = temp_dir
             mock_config.get.side_effect = lambda s, k, d=None: {
                 ("models", "stt_model_path"): str(temp_dir / "whisper"),
-                ("models", "llm_model_name"): "mlx-community/Qwen3.5-4B-MLX-4bit",
+                ("models", "llm_model_name"): "mlx-community/Qwen3.5-2B-OptiQ-4bit",
             }.get((s, k), d)
             mock_config_class.return_value = mock_config
 
@@ -554,7 +554,7 @@ class TestCLICommands:
                 if section == "models" and key == "stt_engine":
                     return "faster-whisper"
                 elif section == "models" and key == "llm_model_name":
-                    return "mlx-community/Qwen3.5-4B-MLX-4bit"
+                    return "mlx-community/Qwen3.5-2B-OptiQ-4bit"
                 elif section == "models" and key == "enable_speaker_diarization":
                     return False  # disable diarization for this test
                 elif section == "memory":
@@ -629,7 +629,7 @@ class TestCLICommands:
                     }
                     return memory_config.get(key, default)
                 elif section == "models" and key == "llm_model_name":
-                    return "mlx-community/Qwen3.5-4B-MLX-4bit"
+                    return "mlx-community/Qwen3.5-2B-OptiQ-4bit"
                 else:
                     return default
 

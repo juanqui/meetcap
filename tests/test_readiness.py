@@ -174,7 +174,7 @@ class TestCheckReadiness:
                 ("models", "stt_engine"): "parakeet",
                 ("models", "enable_speaker_diarization"): False,
                 ("models", "diarization_backend"): "sherpa",
-                ("models", "llm_model_name"): "mlx-community/Qwen3.5-4B-MLX-4bit",
+                ("models", "llm_model_name"): "mlx-community/Qwen3.5-2B-OptiQ-4bit",
             }.get((s, k), d)
             mock_config.expand_path.return_value = Path("/tmp/models")
             MockConfig.return_value = mock_config

@@ -1268,6 +1268,7 @@ wheels = [
 name = "meetcap"
 source = { editable = "." }
 dependencies = [
+    { name = "mlx-lm" },
     { name = "mlx-vlm" },
     { name = "psutil" },
     { name = "pynput" },
@@ -1333,6 +1334,7 @@ requires-dist = [
     { name = "coverage", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=7.6.9,<8.0" },
     { name = "faster-whisper", marker = "extra == 'stt'", specifier = ">=1.2.0,<2.0" },
     { name = "librosa", marker = "extra == 'diarization'", specifier = ">=0.10.0,<1.0" },
+    { name = "mlx-lm", specifier = ">=0.30.7,<1.0" },
     { name = "mlx-vlm", specifier = ">=0.4.0,<1.0" },
     { name = "mlx-whisper", marker = "extra == 'mlx-stt'", specifier = ">=0.4.2,<1.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13.0,<2.0" },

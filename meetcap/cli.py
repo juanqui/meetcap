@@ -882,7 +882,7 @@ class RecordingOrchestrator:
         # use provided model name or default from config
         if not llm_model:
             llm_model = self.config.get(
-                "models", "llm_model_name", "mlx-community/Qwen3.5-4B-MLX-4bit"
+                "models", "llm_model_name", "mlx-community/Qwen3.5-2B-OptiQ-4bit"
             )
 
         llm_config = self.config.get_section("llm")
@@ -1010,7 +1010,7 @@ class RecordingOrchestrator:
         actual_stt = stt_engine or self.config.get("models", "stt_engine", "parakeet")
         stt_model_name = self._get_stt_model_name(actual_stt)
         actual_llm = llm_model or self.config.get(
-            "models", "llm_model_name", "mlx-community/Qwen3.5-4B-MLX-4bit"
+            "models", "llm_model_name", "mlx-community/Qwen3.5-2B-OptiQ-4bit"
         )
         enable_diar = self.config.get("models", "enable_speaker_diarization", True)
         can_proceed, warning = preflight_memory_check(stt_model_name, actual_llm, enable_diar)
@@ -1283,7 +1283,7 @@ class RecordingOrchestrator:
         actual_llm_model = llm_model
         if not actual_llm_model:
             actual_llm_model = self.config.get(
-                "models", "llm_model_name", "mlx-community/Qwen3.5-4B-MLX-4bit"
+                "models", "llm_model_name", "mlx-community/Qwen3.5-2B-OptiQ-4bit"
             )
 
         # extract model name for display
@@ -2275,7 +2275,7 @@ def setup(
 
     llm_models = [
         {
-            "repo": "mlx-community/Qwen3.5-4B-MLX-4bit",
+            "repo": "mlx-community/Qwen3.5-2B-OptiQ-4bit",
             "name": "Qwen3.5-4B",
             "desc": "Best for meeting summaries (default)",
             "size": "~2.9GB",
@@ -2413,7 +2413,7 @@ def verify() -> None:
         checks.append(("mlx-whisper", "⚠️ requires Apple Silicon", "yellow"))
 
     # check mlx llm model (no download)
-    llm_model_name = config.get("models", "llm_model_name", "mlx-community/Qwen3.5-4B-MLX-4bit")
+    llm_model_name = config.get("models", "llm_model_name", "mlx-community/Qwen3.5-2B-OptiQ-4bit")
     if verify_mlx_llm_model(llm_model_name):
         short_name = llm_model_name.split("/")[-1] if "/" in llm_model_name else llm_model_name
         checks.append(("llm model", f"✅ {short_name} ready", "green"))

@@ -36,6 +36,7 @@ dependencies = [
     "tomli>=2.2.1; python_version < '3.11'",
     "toml>=0.10.2,<1.0",
     "urllib3>=2.5.0,<3.0",
+    "mlx-lm>=0.30.7,<1.0",
     "mlx-vlm>=0.4.0,<1.0",
     "torchvision>=0.20.0",  # required by mlx-vlm processor for Qwen3.5
     "psutil>=6.1.0,<7.0",

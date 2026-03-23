@@ -399,12 +399,12 @@ class TestMemoryPreflightCheck:
         mock_total.return_value = 8000.0
 
         sufficient, avail, needed, msg = check_memory_for_model(
-            "llm", "mlx-community/Qwen3.5-4B-MLX-4bit"
+            "llm", "mlx-community/Qwen3.5-2B-OptiQ-4bit"
         )
         assert sufficient is False
         assert "insufficient memory" in msg
         assert avail == 500.0
-        assert needed == 3200 + MEMORY_HEADROOM_MB
+        assert needed == 1600 + MEMORY_HEADROOM_MB
 
     @patch("meetcap.utils.memory.get_available_memory_mb")
     def test_check_memory_psutil_unavailable(self, mock_avail):
@@ -424,7 +424,7 @@ class TestMemoryPreflightCheck:
 
         can_proceed, warning = preflight_memory_check(
             "mlx-community/parakeet-tdt-0.6b-v3",
-            "mlx-community/Qwen3.5-4B-MLX-4bit",
+            "mlx-community/Qwen3.5-2B-OptiQ-4bit",
         )
         assert can_proceed is True
         assert warning == ""
@@ -433,13 +433,13 @@ class TestMemoryPreflightCheck:
     @patch("meetcap.utils.memory.get_total_memory_mb")
     def test_preflight_check_low_memory_warning(self, mock_total, mock_avail):
         """test preflight check warns when memory is tight."""
-        # enough for the smaller STT model but tight for LLM
+        # 4B model needs 3200+512=3712; only 3000 available → warning
         mock_avail.return_value = 3000.0
         mock_total.return_value = 8000.0
 
         can_proceed, warning = preflight_memory_check(
             "mlx-community/parakeet-tdt-0.6b-v3",
-            "mlx-community/Qwen3.5-4B-MLX-4bit",
+            "mlx-community/Qwen3.5-4B-OptiQ-4bit",
         )
         assert "low memory warning" in warning
         # still enough for at least 50% of peak → can proceed
@@ -454,7 +454,7 @@ class TestMemoryPreflightCheck:
 
         can_proceed, warning = preflight_memory_check(
             "mlx-community/parakeet-tdt-0.6b-v3",
-            "mlx-community/Qwen3.5-4B-MLX-4bit",
+            "mlx-community/Qwen3.5-4B-OptiQ-4bit",
         )
         assert can_proceed is False
         assert "low memory warning" in warning
@@ -466,7 +466,7 @@ class TestMemoryPreflightCheck:
 
         can_proceed, warning = preflight_memory_check(
             "mlx-community/parakeet-tdt-0.6b-v3",
-            "mlx-community/Qwen3.5-4B-MLX-4bit",
+            "mlx-community/Qwen3.5-2B-OptiQ-4bit",
         )
         assert can_proceed is True
         assert warning == ""
@@ -483,7 +483,7 @@ class TestMemoryPreflightCheck:
 
         can_proceed, warning = preflight_memory_check(
             "mlx-community/parakeet-tdt-0.6b-v3",
-            "mlx-community/Qwen3.5-4B-MLX-4bit",
+            "mlx-community/Qwen3.5-4B-OptiQ-4bit",
         )
         assert can_proceed is True
         assert warning == ""

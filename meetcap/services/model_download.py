@@ -131,7 +131,7 @@ def verify_whisper_model(
 
 
 def ensure_mlx_llm_model(
-    model_name: str = "mlx-community/Qwen3.5-4B-MLX-4bit",
+    model_name: str = "mlx-community/Qwen3.5-2B-OptiQ-4bit",
 ) -> bool:
     """
     ensure mlx llm model is available, downloading if necessary via huggingface_hub.
@@ -357,7 +357,7 @@ def verify_mlx_whisper_model(
 
 
 def verify_mlx_llm_model(
-    model_name: str = "mlx-community/Qwen3.5-4B-MLX-4bit",
+    model_name: str = "mlx-community/Qwen3.5-2B-OptiQ-4bit",
 ) -> bool:
     """
     verify mlx llm model is available for use.
