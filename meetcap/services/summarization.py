@@ -326,13 +326,15 @@ class SummarizationService:
 
         if self._backend == "mlx-lm":
             from mlx_lm import generate
+            from mlx_lm.sample_utils import make_sampler
 
+            sampler = make_sampler(temp=self.temperature)
             raw_output = generate(
                 self.model,
                 self.processor,
                 prompt=prompt,
                 max_tokens=self.max_tokens,
-                temp=self.temperature,
+                sampler=sampler,
             )
         else:
             from mlx_vlm import generate
