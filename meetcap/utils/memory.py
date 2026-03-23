@@ -8,6 +8,35 @@ from rich.console import Console
 
 console = Console()
 
+# memory estimates in MB — measured on Apple Silicon with unified memory
+MODEL_MEMORY_ESTIMATES: dict[str, int] = {
+    # STT models
+    "parakeet-tdt-0.6b": 800,
+    "parakeet-tdt-0.6b-v3": 800,
+    "mlx-community/parakeet-tdt-0.6b-v3": 800,
+    "whisper-large-v3": 1500,
+    "whisper-large-v3-turbo": 1500,
+    "whisper-small": 500,
+    "whisper-tiny": 100,
+    "mlx-whisper-large-v3-turbo": 1500,
+    "mlx-community/whisper-large-v3-turbo": 1500,
+    "vosk-small": 500,
+    "vosk-standard": 1800,
+    # LLM models (4-bit quantized sizes)
+    "qwen3.5-4b-mlx-4bit": 3200,
+    "mlx-community/qwen3.5-4b-mlx-4bit": 3200,
+    "qwen3.5-9b-mlx-4bit": 6000,
+    "mlx-community/qwen3.5-9b-mlx-4bit": 6000,
+    "qwen2.5-3b": 3000,
+    "qwen2.5-7b": 7000,
+    "qwen2.5-14b": 14000,
+    # diarization
+    "sherpa-diarization": 250,
+}
+
+# minimum headroom (MB) to keep free after loading a model
+MEMORY_HEADROOM_MB = 512
+
 
 def get_memory_usage() -> dict[str, float]:
     """
@@ -29,6 +58,38 @@ def get_memory_usage() -> dict[str, float]:
     except ImportError:
         # psutil not available, return zeros
         return {"rss_mb": 0.0, "vms_mb": 0.0, "percent": 0.0}
+
+
+def get_available_memory_mb() -> float:
+    """
+    get available system memory in MB.
+
+    returns:
+        available memory in MB, or 0.0 if psutil is not available
+    """
+    try:
+        import psutil
+
+        memory = psutil.virtual_memory()
+        return memory.available / 1024 / 1024
+    except ImportError:
+        return 0.0
+
+
+def get_total_memory_mb() -> float:
+    """
+    get total system memory in MB.
+
+    returns:
+        total memory in MB, or 0.0 if psutil is not available
+    """
+    try:
+        import psutil
+
+        memory = psutil.virtual_memory()
+        return memory.total / 1024 / 1024
+    except ImportError:
+        return 0.0
 
 
 def check_memory_pressure(threshold_percent: float = 85) -> bool:
@@ -64,33 +125,116 @@ def estimate_model_memory(model_type: str, model_size: str) -> int:
     returns:
         estimated memory in MB
     """
-    # rough estimates in MB
-    estimates = {
-        # STT models
-        "whisper-large-v3": 1500,
-        "whisper-large-v3-turbo": 1500,
-        "whisper-small": 500,
-        "whisper-tiny": 100,
-        "mlx-whisper-large-v3-turbo": 1500,
-        "mlx-community/whisper-large-v3-turbo": 1500,
-        "vosk-small": 500,
-        "vosk-standard": 1800,
-        # LLM models
-        "qwen2.5-3b": 3000,
-        "qwen2.5-7b": 7000,
-        "qwen2.5-14b": 14000,
-    }
+    # check for exact match first
+    key_lower = model_size.lower()
+    if key_lower in MODEL_MEMORY_ESTIMATES:
+        return MODEL_MEMORY_ESTIMATES[key_lower]
 
     # check for partial matches
-    for key, value in estimates.items():
-        if key in model_size.lower() or model_size.lower() in key:
+    for key, value in MODEL_MEMORY_ESTIMATES.items():
+        if key in key_lower or key_lower in key:
             return value
 
     # default estimates based on model type
     if model_type == "stt":
         return 1500  # default 1.5GB for STT
+    elif model_type == "diarization":
+        return 250
     else:
         return 4000  # default 4GB for LLM
+
+
+def check_memory_for_model(model_type: str, model_name: str) -> tuple[bool, float, float, str]:
+    """
+    check if there is enough available memory to load a model.
+
+    args:
+        model_type: type of model (stt, llm, diarization)
+        model_name: model name/path
+
+    returns:
+        tuple of (sufficient, available_mb, required_mb, message)
+    """
+    available_mb = get_available_memory_mb()
+    if available_mb == 0.0:
+        # psutil not available, assume sufficient
+        return (True, 0.0, 0.0, "")
+
+    required_mb = estimate_model_memory(model_type, model_name) + MEMORY_HEADROOM_MB
+    sufficient = available_mb >= required_mb
+
+    if sufficient:
+        message = ""
+    else:
+        deficit = required_mb - available_mb
+        total_mb = get_total_memory_mb()
+        message = (
+            f"insufficient memory for {model_name}: "
+            f"need ~{required_mb / 1024:.1f} GB but only "
+            f"{available_mb / 1024:.1f} GB available "
+            f"(total: {total_mb / 1024:.0f} GB). "
+            f"free ~{deficit / 1024:.1f} GB or close other apps to proceed"
+        )
+
+    return (sufficient, available_mb, required_mb, message)
+
+
+def preflight_memory_check(
+    stt_model: str,
+    llm_model: str,
+    enable_diarization: bool = True,
+) -> tuple[bool, str]:
+    """
+    pre-flight check: can the full pipeline (STT → diarization → LLM) run
+    sequentially with available memory?
+
+    models are loaded one at a time, so we only need enough memory for the
+    largest single model, not all combined.
+
+    args:
+        stt_model: STT model name
+        llm_model: LLM model name
+        enable_diarization: whether diarization will run
+
+    returns:
+        tuple of (can_proceed, warning_message).
+        can_proceed is False only when there is truly not enough memory.
+        warning_message is non-empty when memory is tight.
+    """
+    available_mb = get_available_memory_mb()
+    if available_mb == 0.0:
+        return (True, "")
+
+    stt_need = estimate_model_memory("stt", stt_model)
+    llm_need = estimate_model_memory("llm", llm_model)
+    diar_need = (
+        estimate_model_memory("diarization", "sherpa-diarization") if enable_diarization else 0
+    )
+
+    # the pipeline loads models sequentially, so peak = max(single model) + headroom
+    peak_need = max(stt_need, llm_need, diar_need) + MEMORY_HEADROOM_MB
+
+    total_mb = get_total_memory_mb()
+
+    if available_mb >= peak_need:
+        return (True, "")
+
+    deficit = peak_need - available_mb
+    largest = "LLM" if llm_need >= stt_need else "STT"
+    largest_gb = max(stt_need, llm_need) / 1024
+
+    message = (
+        f"low memory warning: the {largest} model needs ~{largest_gb:.1f} GB "
+        f"but only {available_mb / 1024:.1f} GB is available "
+        f"(total: {total_mb / 1024:.0f} GB). "
+        f"free ~{deficit / 1024:.1f} GB or close other apps. "
+        f"the process may hang or be killed by the OS if memory runs out"
+    )
+
+    # hard block if less than half of what's needed
+    can_proceed = available_mb >= (peak_need * 0.5)
+
+    return (can_proceed, message)
 
 
 def safe_model_loading(load_func, model_name: str):

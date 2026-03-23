@@ -11,11 +11,16 @@ from meetcap.services.transcription import (
     VoskTranscriptionService,
 )
 from meetcap.utils.memory import (
+    MEMORY_HEADROOM_MB,
     MemoryMonitor,
+    check_memory_for_model,
     check_memory_pressure,
     estimate_model_memory,
+    get_available_memory_mb,
     get_fallback_model,
     get_memory_usage,
+    get_total_memory_mb,
+    preflight_memory_check,
 )
 
 
@@ -56,13 +61,35 @@ class TestMemoryUtils:
         assert estimate_model_memory("stt", "mlx-community/whisper-large-v3-turbo") == 1500
         assert estimate_model_memory("stt", "vosk-standard") == 1800
 
+        # parakeet models
+        assert estimate_model_memory("stt", "mlx-community/parakeet-tdt-0.6b-v3") == 800
+        assert estimate_model_memory("stt", "parakeet-tdt-0.6b") == 800
+
         # LLM models
         assert estimate_model_memory("llm", "qwen2.5-3b") == 3000
         assert estimate_model_memory("llm", "qwen2.5-7b") == 7000
+        assert estimate_model_memory("llm", "mlx-community/qwen3.5-4b-mlx-4bit") == 3200
+        assert estimate_model_memory("llm", "mlx-community/qwen3.5-9b-mlx-4bit") == 6000
+
+        # diarization
+        assert estimate_model_memory("diarization", "sherpa-diarization") == 250
 
         # unknown models
         assert estimate_model_memory("stt", "unknown-model") == 1500
         assert estimate_model_memory("llm", "unknown-model") == 4000
+        assert estimate_model_memory("diarization", "unknown") == 250
+
+    def test_get_available_memory(self):
+        """test available memory retrieval."""
+        available = get_available_memory_mb()
+        assert isinstance(available, float)
+        assert available >= 0
+
+    def test_get_total_memory(self):
+        """test total memory retrieval."""
+        total = get_total_memory_mb()
+        assert isinstance(total, float)
+        assert total >= 0
 
     def test_get_fallback_model(self):
         """test fallback model selection."""
@@ -340,3 +367,165 @@ class TestMemoryConfiguration:
         assert config.get("memory", "memory_report") is True
         assert config.get("memory", "warning_threshold") == 75
         assert config.get("memory", "auto_fallback") is False
+
+
+class TestMemoryPreflightCheck:
+    """test pre-flight memory checks."""
+
+    @patch("meetcap.utils.memory.get_available_memory_mb")
+    @patch("meetcap.utils.memory.get_total_memory_mb")
+    def test_check_memory_for_model_sufficient(self, mock_total, mock_avail):
+        """test memory check passes when sufficient memory available."""
+        mock_avail.return_value = 8000.0
+        mock_total.return_value = 16000.0
+
+        sufficient, avail, needed, msg = check_memory_for_model(
+            "stt", "mlx-community/parakeet-tdt-0.6b-v3"
+        )
+        assert sufficient is True
+        assert msg == ""
+        assert avail == 8000.0
+
+    @patch("meetcap.utils.memory.get_available_memory_mb")
+    @patch("meetcap.utils.memory.get_total_memory_mb")
+    def test_check_memory_for_model_insufficient(self, mock_total, mock_avail):
+        """test memory check fails when insufficient memory available."""
+        mock_avail.return_value = 500.0
+        mock_total.return_value = 8000.0
+
+        sufficient, avail, needed, msg = check_memory_for_model(
+            "llm", "mlx-community/Qwen3.5-4B-MLX-4bit"
+        )
+        assert sufficient is False
+        assert "insufficient memory" in msg
+        assert avail == 500.0
+        assert needed == 3200 + MEMORY_HEADROOM_MB
+
+    @patch("meetcap.utils.memory.get_available_memory_mb")
+    def test_check_memory_psutil_unavailable(self, mock_avail):
+        """test memory check passes gracefully when psutil unavailable."""
+        mock_avail.return_value = 0.0
+
+        sufficient, avail, needed, msg = check_memory_for_model("stt", "parakeet")
+        assert sufficient is True
+        assert msg == ""
+
+    @patch("meetcap.utils.memory.get_available_memory_mb")
+    @patch("meetcap.utils.memory.get_total_memory_mb")
+    def test_preflight_check_sufficient(self, mock_total, mock_avail):
+        """test preflight check passes with adequate memory."""
+        mock_avail.return_value = 8000.0
+        mock_total.return_value = 16000.0
+
+        can_proceed, warning = preflight_memory_check(
+            "mlx-community/parakeet-tdt-0.6b-v3",
+            "mlx-community/Qwen3.5-4B-MLX-4bit",
+        )
+        assert can_proceed is True
+        assert warning == ""
+
+    @patch("meetcap.utils.memory.get_available_memory_mb")
+    @patch("meetcap.utils.memory.get_total_memory_mb")
+    def test_preflight_check_low_memory_warning(self, mock_total, mock_avail):
+        """test preflight check warns when memory is tight."""
+        # enough for the smaller STT model but tight for LLM
+        mock_avail.return_value = 3000.0
+        mock_total.return_value = 8000.0
+
+        can_proceed, warning = preflight_memory_check(
+            "mlx-community/parakeet-tdt-0.6b-v3",
+            "mlx-community/Qwen3.5-4B-MLX-4bit",
+        )
+        assert "low memory warning" in warning
+        # still enough for at least 50% of peak → can proceed
+        assert can_proceed is True
+
+    @patch("meetcap.utils.memory.get_available_memory_mb")
+    @patch("meetcap.utils.memory.get_total_memory_mb")
+    def test_preflight_check_critical_memory(self, mock_total, mock_avail):
+        """test preflight check blocks when memory is critically low."""
+        mock_avail.return_value = 500.0
+        mock_total.return_value = 8000.0
+
+        can_proceed, warning = preflight_memory_check(
+            "mlx-community/parakeet-tdt-0.6b-v3",
+            "mlx-community/Qwen3.5-4B-MLX-4bit",
+        )
+        assert can_proceed is False
+        assert "low memory warning" in warning
+
+    @patch("meetcap.utils.memory.get_available_memory_mb")
+    def test_preflight_check_psutil_unavailable(self, mock_avail):
+        """test preflight check passes when psutil unavailable."""
+        mock_avail.return_value = 0.0
+
+        can_proceed, warning = preflight_memory_check(
+            "mlx-community/parakeet-tdt-0.6b-v3",
+            "mlx-community/Qwen3.5-4B-MLX-4bit",
+        )
+        assert can_proceed is True
+        assert warning == ""
+
+    @patch("meetcap.utils.memory.get_available_memory_mb")
+    @patch("meetcap.utils.memory.get_total_memory_mb")
+    def test_preflight_uses_sequential_peak(self, mock_total, mock_avail):
+        """test that preflight checks peak (max single model), not sum."""
+        # parakeet ~800 MB, qwen3.5-4b ~3200 MB
+        # sequential peak = 3200 + 512 headroom = 3712
+        # if it summed both, would need ~4000+
+        mock_avail.return_value = 4000.0
+        mock_total.return_value = 16000.0
+
+        can_proceed, warning = preflight_memory_check(
+            "mlx-community/parakeet-tdt-0.6b-v3",
+            "mlx-community/Qwen3.5-4B-MLX-4bit",
+        )
+        assert can_proceed is True
+        assert warning == ""
+
+
+class TestProcessScreenReprocessMode:
+    """test ProcessScreen summary-only reprocessing."""
+
+    def test_read_existing_transcript(self, temp_dir):
+        """test reading existing transcript for summary-only mode."""
+        from meetcap.tui.screens.process import ProcessScreen
+
+        # create a fake audio file and transcript
+        audio_file = temp_dir / "recording.opus"
+        audio_file.write_bytes(b"fake audio")
+        transcript_file = temp_dir / "recording.transcript.txt"
+        transcript_file.write_text("hello world this is a test transcript")
+
+        screen = ProcessScreen(audio_path=audio_file, mode="summary")
+        text = screen._read_existing_transcript(audio_file)
+        assert text == "hello world this is a test transcript"
+
+    def test_read_existing_transcript_not_found(self, temp_dir):
+        """test reading transcript when none exists."""
+        from meetcap.tui.screens.process import ProcessScreen
+
+        audio_file = temp_dir / "recording.opus"
+        audio_file.write_bytes(b"fake audio")
+
+        screen = ProcessScreen(audio_path=audio_file, mode="summary")
+        text = screen._read_existing_transcript(audio_file)
+        assert text is None
+
+    def test_process_screen_mode_default(self):
+        """test ProcessScreen defaults to full pipeline mode."""
+        from meetcap.tui.screens.process import ProcessScreen
+
+        screen = ProcessScreen()
+        assert screen._mode == "stt"
+
+    def test_process_screen_mode_summary(self, temp_dir):
+        """test ProcessScreen accepts summary-only mode."""
+        from meetcap.tui.screens.process import ProcessScreen
+
+        audio_file = temp_dir / "recording.opus"
+        audio_file.write_bytes(b"fake audio")
+
+        screen = ProcessScreen(audio_path=audio_file, mode="summary")
+        assert screen._mode == "summary"
+        assert screen._audio_path == audio_file

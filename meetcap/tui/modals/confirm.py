@@ -40,6 +40,55 @@ class StopConfirmModal(ModalScreen[str]):
         self.dismiss("cancel")
 
 
+class ReprocessModal(ModalScreen[str]):
+    """modal for choosing reprocessing mode.
+
+    Returns: "stt" (full), "summary" (summary only), or "cancel"
+    """
+
+    BINDINGS = [
+        ("escape", "cancel", "Cancel"),
+    ]
+
+    def __init__(self, recording_title: str = "", has_transcript: bool = False, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._recording_title = recording_title
+        self._has_transcript = has_transcript
+
+    def compose(self) -> ComposeResult:
+        title = self._recording_title or "this recording"
+        with Vertical(id="reprocess-dialog"):
+            yield Label("Reprocess Recording", id="reprocess-title")
+            yield Static(
+                f"Reprocess '{title}'?\nChoose what to regenerate:",
+                id="reprocess-body",
+            )
+            with Horizontal(id="reprocess-buttons"):
+                yield Button(
+                    "Full (STT + Summary)",
+                    variant="primary",
+                    id="btn-reprocess-full",
+                )
+                if self._has_transcript:
+                    yield Button(
+                        "Summary Only",
+                        variant="default",
+                        id="btn-reprocess-summary",
+                    )
+                yield Button("Cancel", variant="error", id="btn-reprocess-cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-reprocess-full":
+            self.dismiss("stt")
+        elif event.button.id == "btn-reprocess-summary":
+            self.dismiss("summary")
+        elif event.button.id == "btn-reprocess-cancel":
+            self.dismiss("cancel")
+
+    def action_cancel(self) -> None:
+        self.dismiss("cancel")
+
+
 class DeleteConfirmModal(ModalScreen[bool]):
     """confirmation modal for deleting a recording.
 

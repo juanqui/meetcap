@@ -20,9 +20,15 @@ class ProcessScreen(Screen):
         Binding("escape", "back", "Back", show=True),
     ]
 
-    def __init__(self, audio_path: Path | None = None, **kwargs) -> None:
+    def __init__(
+        self,
+        audio_path: Path | None = None,
+        mode: str = "stt",
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
         self._audio_path = audio_path
+        self._mode = mode  # "stt" = full pipeline, "summary" = summary-only
         self._processing = False
 
     def compose(self) -> ComposeResult:
@@ -62,7 +68,8 @@ class ProcessScreen(Screen):
                 self._audio_path = process_file
 
         if self._audio_path and self._audio_path.exists():
-            self._log(f"Processing: {self._audio_path.name}")
+            mode_label = "Reprocessing (summary only)" if self._mode == "summary" else "Processing"
+            self._log(f"{mode_label}: {self._audio_path.name}")
             try:
                 size_mb = self._audio_path.stat().st_size / (1024 * 1024)
                 self.query_one("#process-audio-info", Label).update(
@@ -83,6 +90,26 @@ class ProcessScreen(Screen):
         except Exception:
             pass
 
+    def _check_memory(self, model_type: str, model_name: str) -> bool:
+        """check memory before loading a model. returns True if safe to proceed."""
+        try:
+            from meetcap.utils.memory import check_memory_for_model
+
+            sufficient, avail, needed, msg = check_memory_for_model(model_type, model_name)
+            if not sufficient:
+                self.app.call_from_thread(self._log, f"[red]Memory check failed: {msg}[/red]")
+                self.app.call_from_thread(
+                    self.notify,
+                    "Not enough memory! Close other apps and try again.",
+                    severity="error",
+                )
+                return False
+            elif msg:
+                self.app.call_from_thread(self._log, f"[yellow]{msg}[/yellow]")
+            return True
+        except Exception:
+            return True  # if check fails, proceed optimistically
+
     @work(thread=True)
     def _run_pipeline(self) -> None:  # pragma: no cover
         """run the full processing pipeline in a background thread."""
@@ -102,54 +129,87 @@ class ProcessScreen(Screen):
                 "mlx-community/Qwen3.5-4B-MLX-4bit",
             )
 
-            # stage 1: STT
-            self.app.call_from_thread(self._update_stage, "stt", "active")
-            self.app.call_from_thread(self._log, f"Starting STT ({stt_engine})...")
-            stt_start = time.time()
+            if self._mode == "summary":
+                # summary-only mode: skip STT, read existing transcript
+                self.app.call_from_thread(
+                    self._update_stage, "stt", "done", detail="skipped (reprocess)"
+                )
+                self.app.call_from_thread(
+                    self._update_stage, "diarization", "done", detail="skipped"
+                )
 
-            result = self._run_stt(audio_path, config, stt_engine)
-
-            stt_time = time.time() - stt_start
-            seg_count = len(result.segments) if result else 0
-            self.app.call_from_thread(
-                self._update_stage,
-                "stt",
-                "done",
-                timing=stt_time,
-                detail=f"{seg_count} segments",
-            )
-
-            if not result:
+                # find existing transcript
+                transcript_text = self._read_existing_transcript(audio_path)
+                if transcript_text is None:
+                    self.app.call_from_thread(
+                        self._log,
+                        "[red]No existing transcript found for summary-only reprocess[/red]",
+                    )
+                    return
                 self.app.call_from_thread(
                     self._log,
-                    "[red]STT produced no result[/red]",
+                    f"Using existing transcript ({len(transcript_text)} chars)",
                 )
-                return
-
-            transcript_text = " ".join(seg.text for seg in result.segments)
-
-            # stage 2: diarization
-            enable_diar = config.get("models", "enable_speaker_diarization", True)
-            diar_backend = config.get("models", "diarization_backend", "sherpa")
-            if enable_diar and diar_backend == "sherpa" and stt_engine != "vosk":
-                self.app.call_from_thread(self._update_stage, "diarization", "active")
-                self.app.call_from_thread(self._log, "Running diarization...")
-                diar_start = time.time()
-                self._run_diarization(audio_path, config, result)
-                diar_time = time.time() - diar_start
-                self.app.call_from_thread(
-                    self._update_stage,
-                    "diarization",
-                    "done",
-                    timing=diar_time,
-                )
+                # no STT result object in summary-only mode
+                result = None
             else:
+                # full pipeline: STT
+                # memory check before STT
+                stt_model = self._get_stt_model_name(config, stt_engine)
+                if not self._check_memory("stt", stt_model):
+                    return
+
+                self.app.call_from_thread(self._update_stage, "stt", "active")
+                self.app.call_from_thread(self._log, f"Starting STT ({stt_engine})...")
+                stt_start = time.time()
+
+                result = self._run_stt(audio_path, config, stt_engine)
+
+                stt_time = time.time() - stt_start
+                seg_count = len(result.segments) if result else 0
                 self.app.call_from_thread(
                     self._update_stage,
-                    "diarization",
+                    "stt",
                     "done",
-                    detail="skipped",
+                    timing=stt_time,
+                    detail=f"{seg_count} segments",
                 )
+
+                if not result:
+                    self.app.call_from_thread(
+                        self._log,
+                        "[red]STT produced no result[/red]",
+                    )
+                    return
+
+                transcript_text = " ".join(seg.text for seg in result.segments)
+
+                # stage 2: diarization
+                enable_diar = config.get("models", "enable_speaker_diarization", True)
+                diar_backend = config.get("models", "diarization_backend", "sherpa")
+                if enable_diar and diar_backend == "sherpa" and stt_engine != "vosk":
+                    self.app.call_from_thread(self._update_stage, "diarization", "active")
+                    self.app.call_from_thread(self._log, "Running diarization...")
+                    diar_start = time.time()
+                    self._run_diarization(audio_path, config, result)
+                    diar_time = time.time() - diar_start
+                    self.app.call_from_thread(
+                        self._update_stage,
+                        "diarization",
+                        "done",
+                        timing=diar_time,
+                    )
+                else:
+                    self.app.call_from_thread(
+                        self._update_stage,
+                        "diarization",
+                        "done",
+                        detail="skipped",
+                    )
+
+            # memory check before LLM
+            if not self._check_memory("llm", llm_model):
+                return
 
             # stage 3: summarization
             self.app.call_from_thread(self._update_stage, "summarization", "active")
@@ -176,6 +236,43 @@ class ProcessScreen(Screen):
             self.app.call_from_thread(self._show_done_button)
         finally:
             self._processing = False
+
+    @staticmethod
+    def _get_stt_model_name(config: object, stt_engine: str) -> str:
+        """return the configured model name for a given STT engine."""
+        if stt_engine in ("parakeet", "parakeet-tdt"):
+            return config.get(  # type: ignore[union-attr]
+                "models", "parakeet_model_name", "mlx-community/parakeet-tdt-0.6b-v3"
+            )
+        elif stt_engine in ("mlx-whisper", "mlx"):
+            return config.get(  # type: ignore[union-attr]
+                "models", "mlx_stt_model_name", "mlx-community/whisper-large-v3-turbo"
+            )
+        elif stt_engine in ("faster-whisper", "fwhisper"):
+            return config.get(  # type: ignore[union-attr]
+                "models", "stt_model_name", "large-v3"
+            )
+        return "whisper.cpp"
+
+    def _read_existing_transcript(self, audio_path: Path) -> str | None:
+        """read existing transcript text file for summary-only reprocessing."""
+        # try the standard naming convention
+        base = audio_path.with_suffix("")
+        txt_path = base.with_suffix(".transcript.txt")
+        if txt_path.exists():
+            try:
+                return txt_path.read_text(encoding="utf-8")
+            except Exception:
+                pass
+
+        # try finding any transcript file in the same directory
+        for f in audio_path.parent.glob("*.transcript.txt"):
+            try:
+                return f.read_text(encoding="utf-8")
+            except Exception:
+                continue
+
+        return None
 
     def _run_stt(self, audio_path: Path, config: object, stt_engine: str) -> object | None:
         """run speech-to-text transcription.
@@ -392,7 +489,8 @@ print(json.dumps({{"summary": result}}))
             from meetcap.services.transcription import save_transcript
 
             base_path = audio_path.with_suffix("")
-            save_transcript(result, base_path)
+            if result is not None:
+                save_transcript(result, base_path)
             if summary:
                 save_summary(summary, base_path, transcript_text)
         except Exception as e:

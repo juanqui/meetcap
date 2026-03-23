@@ -177,18 +177,38 @@ class HistoryScreen(Screen):
             pass
 
     def action_reprocess(self) -> None:
-        """reprocess selected recording."""
+        """reprocess selected recording with mode selection."""
         if not self._selected_dir:
             return
-        # find audio file and push a fresh ProcessScreen
+        # find audio file
+        audio_file = None
         for ext in [".opus", ".wav", ".flac"]:
             audio_files = list(self._selected_dir.glob(f"*{ext}"))
             if audio_files:
-                from meetcap.tui.screens.process import ProcessScreen
+                audio_file = audio_files[0]
+                break
+        if not audio_file:
+            self.notify("No audio file found", severity="warning")
+            return
 
-                self.app.push_screen(ProcessScreen(audio_path=audio_files[0]))
+        # check if a transcript already exists (enables summary-only mode)
+        has_transcript = bool(list(self._selected_dir.glob("*.transcript.txt")))
+
+        from meetcap.tui.modals.confirm import ReprocessModal
+
+        title = self._selected_dir.name
+
+        def handle_reprocess(mode: str) -> None:
+            if mode == "cancel":
                 return
-        self.notify("No audio file found", severity="warning")
+            from meetcap.tui.screens.process import ProcessScreen
+
+            self.app.push_screen(ProcessScreen(audio_path=audio_file, mode=mode))
+
+        self.app.push_screen(
+            ReprocessModal(recording_title=title, has_transcript=has_transcript),
+            callback=handle_reprocess,
+        )
 
     def action_delete(self) -> None:
         """delete selected recording with confirmation."""

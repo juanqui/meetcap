@@ -1,8 +1,8 @@
-StopConfirmModal, DeleteConfirmModal, ErrorModal {
+StopConfirmModal, DeleteConfirmModal, ReprocessModal, ErrorModal {
     align: center middle;
 }
 
-#stop-confirm-dialog, #delete-confirm-dialog, #error-dialog {
+#stop-confirm-dialog, #delete-confirm-dialog, #reprocess-dialog, #error-dialog {
     width: 60;
     height: auto;
     padding: 2;
@@ -10,14 +10,14 @@ StopConfirmModal, DeleteConfirmModal, ErrorModal {
     border: thick $primary;
 }
 
-#stop-confirm-title, #delete-confirm-title, #error-title {
+#stop-confirm-title, #delete-confirm-title, #reprocess-title, #error-title {
     text-style: bold;
     text-align: center;
     padding: 0 0 1 0;
     color: $primary;
 }
 
-#stop-confirm-body, #delete-confirm-body, #error-message {
+#stop-confirm-body, #delete-confirm-body, #reprocess-body, #error-message {
     padding: 0 0 1 0;
     text-align: center;
 }
@@ -28,13 +28,13 @@ StopConfirmModal, DeleteConfirmModal, ErrorModal {
     text-align: center;
 }
 
-#stop-confirm-buttons, #delete-confirm-buttons {
+#stop-confirm-buttons, #delete-confirm-buttons, #reprocess-buttons {
     layout: horizontal;
     height: auto;
     align: center middle;
 }
 
-#stop-confirm-buttons Button, #delete-confirm-buttons Button {
+#stop-confirm-buttons Button, #delete-confirm-buttons Button, #reprocess-buttons Button {
     margin: 0 1;
     min-width: 16;
 }

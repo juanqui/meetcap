@@ -49,7 +49,9 @@ from meetcap.utils.config import Config
 from meetcap.utils.logger import ErrorHandler, logger
 from meetcap.utils.memory import (
     MemoryMonitor,
+    check_memory_for_model,
     check_memory_pressure,
+    preflight_memory_check,
 )
 
 console = Console()
@@ -776,6 +778,15 @@ class RecordingOrchestrator:
             )
 
         try:
+            # check memory before loading STT model
+            stt_model_display = self._get_stt_model_name(stt_engine)
+            sufficient, avail, needed, msg = check_memory_for_model("stt", stt_model_display)
+            if not sufficient:
+                console.print(f"[red]{msg}[/red]")
+                return None
+            elif msg:
+                console.print(f"[yellow]{msg}[/yellow]")
+
             # explicitly load model if supported
             if hasattr(stt_service, "load_model"):
                 stt_service.load_model()
@@ -885,6 +896,14 @@ class RecordingOrchestrator:
         )
 
         try:
+            # check memory before loading LLM model
+            sufficient, avail, needed, msg = check_memory_for_model("llm", llm_model)
+            if not sufficient:
+                console.print(f"[red]{msg}[/red]")
+                return None
+            elif msg:
+                console.print(f"[yellow]{msg}[/yellow]")
+
             # explicitly load model if supported
             if hasattr(llm_service, "load_model"):
                 llm_service.load_model()
@@ -927,6 +946,28 @@ class RecordingOrchestrator:
             self._cleanup_service(llm_service, "llm")
             return None
 
+    def _get_stt_model_name(self, stt_engine: str) -> str:
+        """return the configured model name for a given STT engine."""
+        engine = stt_engine
+        if engine == "faster-whisper":
+            engine = "fwhisper"
+        elif engine == "mlx-whisper":
+            engine = "mlx"
+
+        if engine == "parakeet":
+            return self.config.get(
+                "models", "parakeet_model_name", "mlx-community/parakeet-tdt-0.6b-v3"
+            )
+        elif engine == "fwhisper":
+            return self.config.get("models", "stt_model_name", "large-v3")
+        elif engine == "mlx":
+            return self.config.get(
+                "models", "mlx_stt_model_name", "mlx-community/whisper-large-v3-turbo"
+            )
+        elif engine == "vosk":
+            return self.config.get("models", "vosk_model_name", "vosk-model-en-us-0.22")
+        return "whisper.cpp"
+
     def _find_recording_file(self, recording_dir: Path) -> Path | None:
         """
         find the recording file in a directory, trying multiple formats.
@@ -964,6 +1005,21 @@ class RecordingOrchestrator:
         if self.enable_memory_monitoring:
             self.memory_monitor = MemoryMonitor()
             self.memory_monitor.checkpoint("start")
+
+        # pre-flight memory check
+        actual_stt = stt_engine or self.config.get("models", "stt_engine", "parakeet")
+        stt_model_name = self._get_stt_model_name(actual_stt)
+        actual_llm = llm_model or self.config.get(
+            "models", "llm_model_name", "mlx-community/Qwen3.5-4B-MLX-4bit"
+        )
+        enable_diar = self.config.get("models", "enable_speaker_diarization", True)
+        can_proceed, warning = preflight_memory_check(stt_model_name, actual_llm, enable_diar)
+        if warning:
+            console.print(f"\n[yellow]warning: {warning}[/yellow]")
+        if not can_proceed:
+            console.print("[red]aborting: not enough memory to run the pipeline[/red]")
+            console.print("[yellow]close other applications and try again[/yellow]")
+            return
 
         # handle both directory and file inputs
         if audio_path.is_dir():
